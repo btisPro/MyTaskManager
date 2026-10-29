@@ -1422,5 +1422,10 @@ if (typeof initSyncUI === 'function') {
   }
 }
 
+// Affiche la popup d'accueil si l'utilisateur ne l'a pas masquée
+if (typeof initWelcomeModal === 'function') {
+  initWelcomeModal();
+}
+
 renderTree();        // construit l'arborescence dans la sidebar
 showList();          // affiche la liste principale des tâches

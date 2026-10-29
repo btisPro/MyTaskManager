@@ -19,8 +19,9 @@
    Authentification : Personal Access Token (scope: gist)
 ════════════════════════════════════════════════════════════ */
 
-const SYNC_FILENAME = 'mytaskmanager_tasks.json';
-const SYNC_DEBOUNCE = 3000; // ms entre deux syncs automatiques
+const SYNC_FILENAME      = 'mytaskmanager_tasks.json';
+const SYNC_DEBOUNCE      = 3000;       // ms entre deux syncs automatiques
+const SYNC_IDLE_INTERVAL = 10 * 60 * 1000; // 10 min sans sync → déclenche une sync si utilisateur actif
 
 /* ── Clés localStorage ── */
 const KEY_SYNC_ENABLED = 'sync_enabled';
@@ -29,8 +30,11 @@ const KEY_SYNC_GIST_ID = 'sync_gist_id';
 const KEY_SYNC_LAST    = 'sync_last_at';   // timestamp de la dernière sync réussie
 
 /* ── État interne ── */
-let syncDebounceTimer = null;
-let syncInProgress    = false;
+let syncDebounceTimer  = null;
+let syncInProgress     = false;
+let _syncIdleTimer     = null;      // timer de vérification toutes les minutes
+let _userActiveRecently = false;    // l'utilisateur a interagi dans la dernière minute
+let _onTasksUpdatedGlobal = null;   // callback partagé pour la sync sur idle
 
 /* ═══════════════════════════════════════════════════════════
    CONFIGURATION
@@ -420,6 +424,22 @@ function initSyncUI(onTasksUpdated) {
     if (result.ok && result.tasks) onTasksUpdated(result.tasks);
   });
 
+  /* ── Clic sur l'indicateur de statut = sync forcée ── */
+  const syncStatusEl = document.getElementById('syncStatus');
+  if (syncStatusEl) {
+    syncStatusEl.style.cursor = 'pointer';
+    syncStatusEl.title = 'Cliquer pour synchroniser maintenant';
+    syncStatusEl.addEventListener('click', async () => {
+      const cfg = getSyncConfig();
+      if (!cfg.enabled) { modal.classList.remove('hidden'); loadUI(); return; }
+      if (!navigator.onLine) { setSyncStatus('offline'); return; }
+      logMsg('Synchronisation forcée (clic sur le statut)…');
+      const result = await syncBidirectional();
+      logMsg(result.message, result.ok ? 'ok' : 'error');
+      if (result.ok && result.tasks) onTasksUpdated(result.tasks);
+    });
+  }
+
   /* ── Détection du statut réseau ── */
   window.addEventListener('online',  () => { if (getSyncConfig().enabled) setSyncStatus('ok'); });
   window.addEventListener('offline', () => { if (getSyncConfig().enabled) setSyncStatus('offline'); });
@@ -427,4 +447,74 @@ function initSyncUI(onTasksUpdated) {
   /* ── État initial ── */
   const cfg = getSyncConfig();
   setSyncStatus(cfg.enabled ? (navigator.onLine ? 'ok' : 'offline') : 'off');
+
+  /* ── Sync automatique sur inactivité > 10 min ── */
+  _onTasksUpdatedGlobal = onTasksUpdated;
+  _startIdleSyncWatcher();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SYNC SUR IDLE — déclenche une sync si l'utilisateur est
+   actif et que la dernière sync date de plus de 10 minutes.
+════════════════════════════════════════════════════════════ */
+
+/**
+ * Démarre le watcher de sync sur idle.
+ * Vérifie toutes les minutes si une sync est nécessaire.
+ */
+function _startIdleSyncWatcher() {
+  const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'pointerdown', 'scroll', 'touchstart'];
+
+  ACTIVITY_EVENTS.forEach(evt => {
+    window.addEventListener(evt, () => { _userActiveRecently = true; }, { passive: true });
+  });
+
+  _syncIdleTimer = setInterval(async () => {
+    if (!_userActiveRecently) return;
+    _userActiveRecently = false;
+
+    const { enabled } = getSyncConfig();
+    if (!enabled || !navigator.onLine || syncInProgress) return;
+
+    const lastStr = localStorage.getItem(KEY_SYNC_LAST);
+    const lastMs  = lastStr ? new Date(lastStr).getTime() : 0;
+    if (Date.now() - lastMs < SYNC_IDLE_INTERVAL) return;
+
+    const result = await syncBidirectional();
+    if (result.ok && result.tasks && _onTasksUpdatedGlobal) {
+      _onTasksUpdatedGlobal(result.tasks);
+    }
+  }, 60 * 1000);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   POPUP D'ACCUEIL
+════════════════════════════════════════════════════════════ */
+
+const KEY_WELCOME_HIDE = 'welcome_hide';
+
+/**
+ * Affiche la popup d'accueil si l'utilisateur ne l'a pas masquée.
+ * Appelé au chargement de la page.
+ */
+function initWelcomeModal() {
+  const modal      = document.getElementById('welcomeModal');
+  const closeX     = document.getElementById('welcomeModalClose');
+  const closeBtn   = document.getElementById('welcomeCloseBtn');
+  const dontShow   = document.getElementById('welcomeDontShow');
+  if (!modal) return;
+
+  function close() {
+    if (dontShow && dontShow.checked) {
+      localStorage.setItem(KEY_WELCOME_HIDE, 'true');
+    }
+    modal.classList.add('hidden');
+  }
+
+  if (localStorage.getItem(KEY_WELCOME_HIDE) === 'true') return;
+
+  modal.classList.remove('hidden');
+  closeX.addEventListener('click',   close);
+  closeBtn.addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 }

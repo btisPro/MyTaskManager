@@ -44,6 +44,53 @@
         <button id="syncSettingsBtn" title="Paramètres de synchronisation">⚙</button>
       </div>
 
+      <!-- MODALE D'ACCUEIL -->
+      <div id="welcomeModal" class="modal-overlay hidden">
+        <div class="modal-box welcome-box">
+          <div class="modal-header">
+            <h3>👋 Bienvenue dans MyTaskManager</h3>
+            <button id="welcomeModalClose" class="modal-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="welcome-section">
+              <h4>📋 Gestion de tâches</h4>
+              <p>Organisez vos tâches en <strong>arborescence infinie</strong> : chaque tâche peut contenir des sous-tâches, accessibles via un clic sur 📋.</p>
+              <ul>
+                <li><strong>Prioriser</strong> : cliquez sur une tâche pour la faire remonter en tête de liste. Plusieurs clics rapides cumulent.</li>
+                <li><strong>Réordonner</strong> : glissez-déposez les tâches dans la liste ou vers un nœud de l'arborescence (sidebar).</li>
+                <li><strong>Notes riches</strong> : dans la vue détail, éditez des notes avec texte formaté, listes, liens…</li>
+                <li><strong>Rechercher</strong> : la barre de recherche explore le niveau courant ou toute l'arborescence, titres et notes.</li>
+              </ul>
+            </div>
+
+            <div class="welcome-section">
+              <h4>🌳 Arborescence (sidebar)</h4>
+              <p>La sidebar gauche affiche l'arborescence complète. Cliquez sur un nœud pour y naviguer. Le nœud racine 🏠 affiche toutes les tâches de premier niveau. La sidebar est redimensionnable et peut être masquée.</p>
+            </div>
+
+            <div class="welcome-section">
+              <h4>☁️ Synchronisation (optionnelle)</h4>
+              <p>Vos données sont <strong>toujours sauvegardées localement</strong> (localStorage). La sync via <strong>GitHub Gist</strong> est optionnelle et vous permet d'accéder à vos tâches depuis plusieurs appareils (PC, smartphone…).</p>
+              <p class="welcome-tip">Pour activer la sync :</p>
+              <ol>
+                <li>Créez un <strong>GitHub Gist</strong> vide (secret) sur <a href="https://gist.github.com" target="_blank">gist.github.com</a>.</li>
+                <li>Générez un <strong>Personal Access Token</strong> avec la portée <code>gist</code> sur <a href="https://github.com/settings/tokens" target="_blank">github.com/settings/tokens</a>.</li>
+                <li>Cliquez sur ⚙ en haut à droite, activez la sync et renseignez le token et l'ID du Gist.</li>
+              </ol>
+              <p>La synchronisation est <strong>bidirectionnelle</strong> (merge automatique) et fonctionne en arrière-plan. Elle se déclenche aussi si vous êtes actif et que la dernière sync date de plus de 10 minutes. Vous pouvez aussi cliquer sur l'indicateur de statut (⚫/🟢/🔴) pour forcer une sync immédiate.</p>
+            </div>
+
+            <div class="welcome-footer">
+              <label class="welcome-no-show">
+                <input type="checkbox" id="welcomeDontShow">
+                Ne plus afficher ce message
+              </label>
+              <button id="welcomeCloseBtn" class="btn-primary">Commencer !</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- MODALE PARAMÈTRES SYNC -->
       <div id="syncModal" class="modal-overlay hidden">
         <div class="modal-box">

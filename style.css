@@ -844,6 +844,79 @@ h2:hover { color: var(--accent); }
 .sync-log .log-error { color: #f87171; }
 .sync-log .log-info  { color: #93c5fd; }
 
+/* ── Modale d'accueil ─────────────────────────────────────── */
+
+.welcome-box {
+  max-width: 600px;
+}
+
+.welcome-section {
+  margin-bottom: 20px;
+}
+
+.welcome-section h4 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.welcome-section p {
+  font-size: 0.88rem;
+  color: var(--text);
+  line-height: 1.6;
+  margin-bottom: 6px;
+}
+
+.welcome-section ul,
+.welcome-section ol {
+  padding-left: 20px;
+  font-size: 0.87rem;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.welcome-section a { color: var(--accent); }
+
+.welcome-section code {
+  background: #e0e7ff;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+}
+
+.welcome-tip {
+  font-weight: 600;
+  margin-top: 8px !important;
+}
+
+.welcome-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+
+.welcome-no-show {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.welcome-no-show input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 640px) {
   #sidebar {
