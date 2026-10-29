@@ -8,7 +8,7 @@
    l'ancien cache et force le téléchargement de tous les fichiers.
 ════════════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const CACHE_NAME    = `mytaskmanager-${CACHE_VERSION}`;
 
 const APP_FILES = [
@@ -17,6 +17,10 @@ const APP_FILES = [
   './app.js',
   './style.css',
   './sync.js',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
+  './apple-touch-icon.png',
   'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js',
   'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css',
 ];

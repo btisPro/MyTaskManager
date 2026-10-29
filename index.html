@@ -2,8 +2,25 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>MyTaskManager</title>
+
+  <!-- PWA : manifest + thème -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#4f46e5">
+
+  <!-- iOS : comportement plein écran + icône -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Tasks">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+
+  <!-- Android / général -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="application-name" content="MyTaskManager">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css">
   <link rel="stylesheet" href="style.css">
 </head>
