@@ -193,5 +193,38 @@
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
   <script src="sync.js"></script>
   <script src="app.js"></script>
+
+  <!-- Bannière de mise à jour -->
+  <div id="updateBanner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;
+    background:#4f46e5;color:#fff;padding:12px 20px;
+    align-items:center;justify-content:space-between;gap:12px;
+    font-size:0.9rem;box-shadow:0 -2px 12px rgba(0,0,0,0.2);">
+    <span>🆕 Une nouvelle version est disponible.</span>
+    <button onclick="window.location.reload()" style="background:#fff;color:#4f46e5;border:none;
+      border-radius:6px;padding:7px 14px;font-weight:700;cursor:pointer;font-size:0.88rem;">
+      Mettre à jour
+    </button>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').then(reg => {
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              const b = document.getElementById('updateBanner');
+              b.style.display = 'flex';
+            }
+          });
+        });
+      });
+
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) { refreshing = true; window.location.reload(); }
+      });
+    }
+  </script>
 </body>
 </html>
