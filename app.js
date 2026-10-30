@@ -339,6 +339,24 @@ sidebarClose.addEventListener('click', () => {
   applySidebarState();
 });
 
+/* ── Filtre arborescence sidebar ────────────────────────────── */
+const sidebarFilter = document.getElementById('sidebarFilter');
+const sidebarFilterClear = document.getElementById('sidebarFilterClear');
+
+sidebarFilter.addEventListener('input', (e) => {
+  treeFilterQuery = e.target.value.trim().toLowerCase();
+  renderTree();
+  // Montre/cache le bouton clear
+  sidebarFilterClear.classList.toggle('hidden', !treeFilterQuery);
+});
+
+sidebarFilterClear.addEventListener('click', () => {
+  treeFilterQuery = '';
+  sidebarFilter.value = '';
+  sidebarFilterClear.classList.add('hidden');
+  renderTree();
+});
+
 /* ── Redimensionnement par glisser la poignée (souris) ── */
 let isResizing = false;
 
@@ -387,24 +405,78 @@ document.addEventListener('touchend', () => { isResizing = false; });
        div.tree-children     ← sous-nœuds (masqués si "collapsed")
 ════════════════════════════════════════════════════════════ */
 
+/* ── Filtre sidebar ─────────────────────────────────────────
+   treeFilterQuery : mot-clé courant (vide = pas de filtre)
+   treeVisibleIds  : Set des ids à afficher quand filtre actif
+      = ids correspondants + tous leurs ancêtres + tous leurs descendants
+══════════════════════════════════════════════════════════════ */
+let treeFilterQuery = '';
+let treeVisibleIds  = null; // null = pas de filtre actif
+
+/**
+ * Calcule l'ensemble des ids à afficher pour un mot-clé donné.
+ * Un nœud est visible si :
+ *   - il correspond au filtre (→ "match")
+ *   - il est ancêtre d'un nœud correspondant (pour montrer le chemin)
+ *   - il est descendant d'un nœud correspondant (pour tout afficher)
+ *
+ * @param {Task[]} tasks   - Arbre complet
+ * @param {string} needle  - Mot-clé en minuscules
+ * @returns {Set<number>}  - Ids à afficher ; null si needle vide
+ */
+function computeVisibleIds(tasks, needle) {
+  if (!needle) return null;
+  const visible  = new Set();
+  const matched  = new Set();
+
+  // Première passe : collecte des ids qui correspondent + tous leurs descendants
+  function collectMatches(list) {
+    let anyMatch = false;
+    for (const t of list) {
+      const selfMatch = t.text.toLowerCase().includes(needle);
+      const childMatch = t.children.length ? collectMatches(t.children) : false;
+      if (selfMatch) {
+        matched.add(t.id);
+        visible.add(t.id);
+        // Tous les descendants d'un nœud correspondant sont visibles
+        addAllDescendants(t.children, visible);
+      }
+      if (selfMatch || childMatch) {
+        visible.add(t.id); // ancêtre visible pour montrer le chemin
+        anyMatch = true;
+      }
+    }
+    return anyMatch;
+  }
+
+  function addAllDescendants(list, set) {
+    for (const t of list) {
+      set.add(t.id);
+      if (t.children.length) addAllDescendants(t.children, set);
+    }
+  }
+
+  collectMatches(tasks);
+  return { visible, matched };
+}
+
 /**
  * Reconstruit entièrement l'arbre dans la sidebar.
  * Affiche d'abord un nœud "racine" fixe permettant de revenir
  * au niveau le plus haut et de servir de cible de drop vers la racine.
  */
 function renderTree() {
+  const filterInfo = computeVisibleIds(rootTasks, treeFilterQuery);
+
   sidebarTree.innerHTML = '';
 
   // ── Nœud racine fixe ──────────────────────────────────────
-  // Ce nœud spécial représente la liste de premier niveau.
-  // Cliquer dessus revient à la vue liste principale.
-  // Il accepte aussi les drops pour déplacer une tâche vers la racine.
   const rootRow = document.createElement('div');
   rootRow.className = 'tree-row tree-root-node' + (activeTreeTaskId === null ? ' active' : '');
   rootRow.title = 'Revenir à la liste principale';
 
   const rootIcon = document.createElement('span');
-  rootIcon.className = 'tree-toggle leaf'; // pas de ▶ sur la racine
+  rootIcon.className = 'tree-toggle leaf';
   rootIcon.textContent = '▶';
 
   const rootLabel = document.createElement('span');
@@ -415,7 +487,6 @@ function renderTree() {
   rootRow.appendChild(rootLabel);
   sidebarTree.appendChild(rootRow);
 
-  // Clic sur la racine → retour à la vue liste principale
   rootRow.addEventListener('click', () => {
     closeSearch();
     navigationStack = [{ tasks: rootTasks, title: 'Tâches', taskId: null }];
@@ -425,92 +496,124 @@ function renderTree() {
     if (window.innerWidth <= 640) { sidebarCollapsed = true; applySidebarState(); }
   });
 
-  // Drop sur la racine → déplace la tâche au niveau racine (en tête)
   attachRootDropHandlers(rootRow);
 
   // ── Nœuds des tâches de l'arborescence ───────────────────
-  buildTreeNodes(rootTasks, sidebarTree, 0);
+  if (filterInfo && filterInfo.visible.size === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'tree-filter-empty';
+    empty.textContent = 'Aucun résultat';
+    sidebarTree.appendChild(empty);
+  } else {
+    buildTreeNodes(rootTasks, sidebarTree, 0, filterInfo);
+  }
 }
 
 /**
  * Construit récursivement les nœuds DOM pour un tableau de tâches.
- * @param {Task[]} tasks      - Tableau de tâches à afficher
- * @param {HTMLElement} container - Élément parent dans lequel insérer les nœuds
- * @param {number} depth      - Profondeur dans l'arbre (indentation visuelle)
+ * @param {Task[]}      tasks       - Tableau de tâches à afficher
+ * @param {HTMLElement} container   - Élément parent dans lequel insérer les nœuds
+ * @param {number}      depth       - Profondeur (indentation)
+ * @param {object|null} filterInfo  - { visible: Set, matched: Set } ou null
  */
-function buildTreeNodes(tasks, container, depth) {
+function buildTreeNodes(tasks, container, depth, filterInfo = null) {
   tasks.forEach(task => {
+    // En mode filtre, on saute les nœuds hors du sous-ensemble visible
+    if (filterInfo && !filterInfo.visible.has(task.id)) return;
+
     const node = document.createElement('div');
     node.className = 'tree-node';
 
-    // Ligne cliquable représentant la tâche
     const row = document.createElement('div');
-    row.className = 'tree-row' + (task.id === activeTreeTaskId ? ' active' : '');
-    row.style.paddingLeft = (14 + depth * 16) + 'px'; // indentation proportionnelle à la profondeur
+    const isMatch = filterInfo && filterInfo.matched.has(task.id);
+    row.className = 'tree-row'
+      + (task.id === activeTreeTaskId ? ' active' : '')
+      + (isMatch ? ' tree-match' : '');
+    row.style.paddingLeft = (14 + depth * 16) + 'px';
 
-    // Triangle ▶ de pliage/dépliage ; invisible ("leaf") si pas de sous-tâches
     const toggle = document.createElement('span');
-    toggle.className = 'tree-toggle' +
-      (task.children.length === 0 ? ' leaf' : (treeCollapsed[task.id] ? '' : ' open'));
+    // En mode filtre, tous les nœuds visibles sont toujours dépliés
+    const forceOpen = filterInfo !== null;
+    toggle.className = 'tree-toggle'
+      + (task.children.length === 0 ? ' leaf'
+        : ((!forceOpen && treeCollapsed[task.id]) ? '' : ' open'));
     toggle.textContent = '▶';
 
     const label = document.createElement('span');
     label.className = 'tree-label';
-    label.textContent = task.text;
-    label.title = task.text; // tooltip pour les titres longs
+    // En mode filtre, surligne la portion correspondante du texte
+    if (isMatch && treeFilterQuery) {
+      label.innerHTML = highlightMatch(task.text, treeFilterQuery);
+    } else {
+      label.textContent = task.text;
+    }
+    label.title = task.text;
 
     row.appendChild(toggle);
     row.appendChild(label);
 
-    // Conteneur des enfants, masqué si le nœud est replié
     const childContainer = document.createElement('div');
-    childContainer.className = 'tree-children' + (treeCollapsed[task.id] ? ' collapsed' : '');
+    const isCollapsed = !forceOpen && !!treeCollapsed[task.id];
+    childContainer.className = 'tree-children' + (isCollapsed ? ' collapsed' : '');
 
-    // Clic sur le ▶ : bascule repli/déploiement sans naviguer
     toggle.addEventListener('click', (e) => {
-      e.stopPropagation(); // ne pas déclencher la navigation du row
+      e.stopPropagation();
       if (task.children.length === 0) return;
+      if (forceOpen) return; // pas de repli en mode filtre
       treeCollapsed[task.id] = !treeCollapsed[task.id];
       localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
       toggle.className = 'tree-toggle' + (treeCollapsed[task.id] ? '' : ' open');
       childContainer.classList.toggle('collapsed', !!treeCollapsed[task.id]);
     });
 
-    // Clic sur la ligne : navigation (ignoré si on vient de finir un drag)
     row.addEventListener('click', () => {
-      if (treeDragTaskId !== null) return; // évite la navigation accidentelle après un drag
+      if (treeDragTaskId !== null) return;
       navigateToTask(task);
     });
 
-    // ── Drag source : rendre le nœud draggable ────────────────
     row.draggable = true;
     row.addEventListener('dragstart', (e) => {
       treeDragTaskId = task.id;
       row.classList.add('tree-dragging');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('treeDragTaskId', String(task.id));
-      e.stopPropagation(); // ne pas interférer avec d'autres dragstart
+      e.stopPropagation();
     });
     row.addEventListener('dragend', () => {
       row.classList.remove('tree-dragging');
       clearTreeDropHighlight();
       clearExpandTimer();
-      // Petit délai avant de réactiver la navigation au clic (évite le clic post-drag)
       setTimeout(() => { treeDragTaskId = null; }, 50);
     });
 
-    // Rendre la ligne receptrice de drops (liste centrale + arbre + vue détail)
     attachTreeDropHandlers(row, task, childContainer);
 
     node.appendChild(row);
     node.appendChild(childContainer);
     container.appendChild(node);
 
-    // Récursion sur les enfants
     if (task.children.length > 0) {
-      buildTreeNodes(task.children, childContainer, depth + 1);
+      buildTreeNodes(task.children, childContainer, depth + 1, filterInfo);
     }
   });
+}
+
+/**
+ * Surligne la première occurrence de `needle` dans `text` avec un <mark>.
+ * @param {string} text
+ * @param {string} needle
+ * @returns {string} HTML sécurisé avec <mark>
+ */
+function highlightMatch(text, needle) {
+  const idx = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (idx === -1) return escHtml(text);
+  return escHtml(text.slice(0, idx))
+    + '<mark class="tree-highlight">' + escHtml(text.slice(idx, idx + needle.length)) + '</mark>'
+    + escHtml(text.slice(idx + needle.length));
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 /**
