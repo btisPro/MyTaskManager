@@ -858,6 +858,159 @@ h2:hover { color: var(--accent); }
 .sync-log .log-error { color: #f87171; }
 .sync-log .log-info  { color: #93c5fd; }
 
+/* ── Bouton corbeille topbar ──────────────────────────────── */
+
+.trash-topbar-btn {
+  position: relative;
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.trash-topbar-btn:hover { background: #fee2e2; color: #ef4444; }
+
+.trash-badge {
+  position: absolute;
+  top: 0; right: 0;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  min-width: 15px;
+  height: 15px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  line-height: 1;
+}
+.trash-badge.hidden { display: none !important; }
+
+/* ── Modale corbeille ─────────────────────────────────────── */
+
+.trash-box { max-width: 560px; }
+
+.trash-count-badge {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.trash-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 32px 0;
+  font-size: 0.95rem;
+}
+
+.trash-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 55vh;
+  overflow-y: auto;
+  margin-bottom: 16px;
+}
+
+.trash-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.trash-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.trash-item-name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trash-item-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.trash-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-restore {
+  padding: 6px 12px;
+  background: var(--accent-light);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.btn-restore:hover { background: var(--accent); color: #fff; }
+
+.btn-delete-forever {
+  padding: 6px 9px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.btn-delete-forever:hover { color: #ef4444; border-color: #ef4444; background: #fee2e2; }
+
+.trash-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.trash-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.btn-danger {
+  padding: 8px 14px;
+  background: none;
+  border: 2px solid #ef4444;
+  color: #ef4444;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-danger:hover { background: #ef4444; color: #fff; }
+
 /* ── Modale d'accueil ─────────────────────────────────────── */
 
 .welcome-box {

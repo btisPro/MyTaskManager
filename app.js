@@ -39,11 +39,93 @@ function migrateTask(t, i) {
  */
 function saveTasks() {
   localStorage.setItem('tasks', JSON.stringify(rootTasks));
-  // syncAuto est défini dans sync.js ; si les données distantes sont plus récentes
-  // après merge, onSyncUpdate recharge l'arbre complet.
   if (typeof syncAuto === 'function') {
     syncAuto(onSyncUpdate);
   }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CORBEILLE — Suppression douce avec restauration
+   Chaque entrée a la forme :
+     { task, parentId, deletedAt }
+   TTL : 30 jours. Purge automatique au chargement.
+   Synchronisée dans le Gist via la clé "trash".
+════════════════════════════════════════════════════════════ */
+
+const TRASH_TTL = 30 * 24 * 60 * 60 * 1000; // 30 jours en ms
+
+/** Charge la corbeille depuis localStorage et purge les entrées expirées. */
+function loadTrash() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('trash')) || [];
+    const now = Date.now();
+    return raw.filter(e => now - e.deletedAt < TRASH_TTL);
+  } catch { return []; }
+}
+
+/** Sérialise la corbeille dans localStorage. */
+function saveTrash() {
+  localStorage.setItem('trash', JSON.stringify(trashItems));
+}
+
+/**
+ * Déplace une tâche vers la corbeille au lieu de la supprimer définitivement.
+ * Retire la tâche de son tableau parent et l'ajoute à trashItems.
+ * @param {Task}   task     - La tâche à mettre en corbeille
+ * @param {Task[]} srcList  - Le tableau parent d'où retirer la tâche
+ * @param {number|null} parentId - Id de la tâche parente (null = racine)
+ */
+function trashTask(task, srcList, parentId) {
+  const idx = srcList.findIndex(t => t.id === task.id);
+  if (idx === -1) return;
+  srcList.splice(idx, 1);
+  trashItems.unshift({ task, parentId: parentId ?? null, deletedAt: Date.now() });
+  saveTasks();
+  saveTrash();
+}
+
+/**
+ * Restaure une entrée de la corbeille.
+ * Si le parent d'origine existe encore → insère en tête de sa liste children.
+ * Sinon → insère en tête de rootTasks.
+ * @param {object} entry - Entrée de corbeille { task, parentId, deletedAt }
+ */
+function restoreTask(entry) {
+  const idx = trashItems.indexOf(entry);
+  if (idx === -1) return;
+  trashItems.splice(idx, 1);
+
+  const { task, parentId } = entry;
+  task.children = task.children || [];
+
+  if (parentId !== null) {
+    const parent = findTaskById(rootTasks, parentId);
+    if (parent) {
+      parent.children.unshift(task);
+      saveTasks();
+      saveTrash();
+      return;
+    }
+  }
+  rootTasks.unshift(task);
+  saveTasks();
+  saveTrash();
+}
+
+/**
+ * Supprime définitivement une entrée de la corbeille.
+ * @param {object} entry - Entrée de corbeille
+ */
+function deleteForever(entry) {
+  const idx = trashItems.indexOf(entry);
+  if (idx !== -1) trashItems.splice(idx, 1);
+  saveTrash();
+}
+
+/** Vide entièrement la corbeille (suppression définitive de tous les éléments). */
+function emptyTrash() {
+  trashItems.length = 0;
+  saveTrash();
 }
 
 /**
@@ -52,9 +134,13 @@ function saveTasks() {
  * Recharge rootTasks et rafraîchit la vue courante.
  * @param {Task[]} mergedTasks - Arbre fusionné retourné par la sync
  */
-function onSyncUpdate(mergedTasks) {
+function onSyncUpdate(mergedTasks, mergedTrash) {
   rootTasks = mergedTasks.map(migrateTask);
-  // Réinitialise la pile de navigation à la racine pour éviter des états incohérents
+  if (mergedTrash) {
+    trashItems.length = 0;
+    mergedTrash.forEach(e => trashItems.push(e));
+    updateTrashBadge();
+  }
   navigationStack = [{ tasks: rootTasks, title: 'Tâches', taskId: null }];
   activeTreeTaskId = null;
   renderTree();
@@ -67,6 +153,9 @@ function onSyncUpdate(mergedTasks) {
 
 /** Tableau racine de toutes les tâches de premier niveau. */
 let rootTasks = loadTasks();
+
+/** Tableau des tâches en corbeille : { task, parentId, deletedAt }[] */
+let trashItems = loadTrash();
 
 /**
  * Pile de navigation : chaque entrée représente un niveau de l'arborescence
@@ -808,12 +897,16 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
     else openDetail(task);
   });
 
-  // Suppression : retire la tâche du tableau, re-render
+  // Suppression douce : déplace dans la corbeille au lieu de supprimer
   del.addEventListener('click', (e) => {
     e.stopPropagation();
-    const liveIdx = tasks.findIndex(t => t.id === task.id);
-    if (liveIdx !== -1) tasks.splice(liveIdx, 1);
-    saveTasks();
+    // Détermine le parentId : l'entrée courante de la navigationStack pointe
+    // vers le niveau où se trouve la tâche ; son taskId est le parent.
+    const parentId = searchResultMode
+      ? null
+      : (navigationStack[navigationStack.length - 1].taskId ?? null);
+    trashTask(task, tasks, parentId);
+    updateTrashBadge();
     if (searchResultMode) runSearch();
     else { renderList(listEl, tasks); renderTree(); }
   });
@@ -1161,19 +1254,21 @@ deleteTaskBtn.addEventListener('click', () => {
 
   const currentEntry = navigationStack[navigationStack.length - 1];
   const taskId = currentEntry.taskId;
-  if (!taskId) return; // on est à la racine, rien à supprimer
+  if (!taskId) return;
 
-  // Demande de confirmation pour éviter les suppressions accidentelles
   const task = findTaskById(rootTasks, taskId);
-  if (!confirm(`Supprimer « ${task ? task.text : 'cette tâche'} » et toutes ses sous-tâches ?`)) return;
 
-  // Trouve la liste parente et retire la tâche
+  // Détermine le parentId : l'avant-dernier niveau de la pile
+  const parentEntry = navigationStack.length >= 2
+    ? navigationStack[navigationStack.length - 2]
+    : null;
+  const parentId = parentEntry ? (parentEntry.taskId ?? null) : null;
+
   const parentList = findParentList(rootTasks, taskId);
-  if (parentList) {
-    const idx = parentList.findIndex(t => t.id === taskId);
-    if (idx !== -1) parentList.splice(idx, 1);
-  }
-  saveTasks();
+  if (!parentList) return;
+
+  trashTask(task, parentList, parentId);
+  updateTrashBadge();
 
   // Remonte d'un niveau dans la navigation
   navigationStack.pop();
@@ -1182,11 +1277,11 @@ deleteTaskBtn.addEventListener('click', () => {
     renderTree();
     showList();
   } else {
-    const parentEntry = navigationStack[navigationStack.length - 1];
-    const parentTask  = findTaskById(rootTasks, parentEntry.taskId);
-    activeTreeTaskId  = parentEntry.taskId;
+    const prevEntry  = navigationStack[navigationStack.length - 1];
+    const prevTask   = findTaskById(rootTasks, prevEntry.taskId);
+    activeTreeTaskId = prevEntry.taskId;
     renderTree();
-    if (parentTask) showDetail(parentTask); else showList();
+    if (prevTask) showDetail(prevTask); else showList();
   }
 });
 
@@ -1432,6 +1527,130 @@ function matchTask(task, needle, inNotes) {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   CORBEILLE UI — Modale de consultation et restauration
+════════════════════════════════════════════════════════════ */
+
+/**
+ * Met à jour le badge numérique sur le bouton corbeille de la topbar.
+ * Affiche le nombre d'éléments en corbeille, masque le badge si vide.
+ */
+function updateTrashBadge() {
+  const badge = document.getElementById('trashBadge');
+  if (!badge) return;
+  if (trashItems.length === 0) {
+    badge.classList.add('hidden');
+  } else {
+    badge.textContent = trashItems.length;
+    badge.classList.remove('hidden');
+  }
+}
+
+/** Formate un timestamp en "il y a X jours/heures/minutes". */
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  const min  = Math.floor(diff / 60000);
+  const h    = Math.floor(diff / 3600000);
+  const d    = Math.floor(diff / 86400000);
+  if (d > 0)  return `il y a ${d} jour${d > 1 ? 's' : ''}`;
+  if (h > 0)  return `il y a ${h} heure${h > 1 ? 's' : ''}`;
+  if (min > 0) return `il y a ${min} min`;
+  return "à l'instant";
+}
+
+/** Construit et affiche la liste des éléments en corbeille dans la modale. */
+function renderTrashList() {
+  const list      = document.getElementById('trashList');
+  const emptyMsg  = document.getElementById('trashEmpty');
+  const countEl   = document.getElementById('trashCount');
+  if (!list) return;
+
+  list.innerHTML = '';
+  if (countEl) countEl.textContent = trashItems.length ? `(${trashItems.length})` : '';
+
+  if (trashItems.length === 0) {
+    emptyMsg && emptyMsg.classList.remove('hidden');
+    return;
+  }
+  emptyMsg && emptyMsg.classList.add('hidden');
+
+  trashItems.forEach(entry => {
+    const li = document.createElement('li');
+    li.className = 'trash-item';
+
+    const info = document.createElement('div');
+    info.className = 'trash-item-info';
+
+    const name = document.createElement('span');
+    name.className = 'trash-item-name';
+    name.textContent = entry.task.text;
+
+    const meta = document.createElement('span');
+    meta.className = 'trash-item-meta';
+    const parentTask = entry.parentId ? findTaskById(rootTasks, entry.parentId) : null;
+    const parentLabel = parentTask ? `dans « ${parentTask.text} »` : 'à la racine';
+    const subCount = entry.task.children && entry.task.children.length
+      ? ` · ${entry.task.children.length} sous-tâche(s)` : '';
+    meta.textContent = `${timeAgo(entry.deletedAt)} · ${parentLabel}${subCount}`;
+
+    info.appendChild(name);
+    info.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'trash-item-actions';
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.className = 'btn-restore';
+    restoreBtn.textContent = '↩ Restaurer';
+    restoreBtn.addEventListener('click', () => {
+      restoreTask(entry);
+      updateTrashBadge();
+      renderTrashList();
+      renderTree();
+    });
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn-delete-forever';
+    deleteBtn.textContent = '✕';
+    deleteBtn.title = 'Supprimer définitivement';
+    deleteBtn.addEventListener('click', () => {
+      deleteForever(entry);
+      updateTrashBadge();
+      renderTrashList();
+    });
+
+    actions.appendChild(restoreBtn);
+    actions.appendChild(deleteBtn);
+    li.appendChild(info);
+    li.appendChild(actions);
+    list.appendChild(li);
+  });
+}
+
+/** Initialise les événements de la modale corbeille. */
+function initTrashUI() {
+  const modal      = document.getElementById('trashModal');
+  const openBtn    = document.getElementById('trashBtn');
+  const closeBtn   = document.getElementById('trashModalClose');
+  const emptyBtn   = document.getElementById('emptyTrashBtn');
+  if (!modal || !openBtn) return;
+
+  openBtn.addEventListener('click', () => {
+    renderTrashList();
+    modal.classList.remove('hidden');
+  });
+  closeBtn.addEventListener('click', () => modal.classList.add('hidden'));
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+
+  emptyBtn.addEventListener('click', () => {
+    if (!trashItems.length) return;
+    if (!confirm('Supprimer définitivement tous les éléments de la corbeille ?')) return;
+    emptyTrash();
+    updateTrashBadge();
+    renderTrashList();
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════
    UTILS — Fonctions utilitaires
 ════════════════════════════════════════════════════════════ */
 
@@ -1474,5 +1693,7 @@ if (typeof initWelcomeModal === 'function') {
   initWelcomeModal();
 }
 
+initTrashUI();       // initialise la modale corbeille
+updateTrashBadge();  // affiche le badge si des éléments sont en corbeille
 renderTree();        // construit l'arborescence dans la sidebar
 showList();          // affiche la liste principale des tâches

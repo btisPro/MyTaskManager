@@ -54,6 +54,7 @@
             <label><input type="checkbox" id="searchInNotes"> Dans les notes</label>
           </div>
         </div>
+        <button id="trashBtn" title="Corbeille" class="trash-topbar-btn">🗑<span id="trashBadge" class="trash-badge hidden"></span></button>
         <div id="syncStatus" class="sync-status sync-off" title="Synchronisation">
           <span id="syncIcon">⚫</span>
           <span id="syncLabel">Local</span>
@@ -103,6 +104,24 @@
                 Ne plus afficher ce message
               </label>
               <button id="welcomeCloseBtn" class="btn-primary">Commencer !</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODALE CORBEILLE -->
+      <div id="trashModal" class="modal-overlay hidden">
+        <div class="modal-box trash-box">
+          <div class="modal-header">
+            <h3>🗑 Corbeille <span id="trashCount" class="trash-count-badge"></span></h3>
+            <button id="trashModalClose" class="modal-close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="trashEmpty" class="trash-empty hidden">La corbeille est vide.</div>
+            <ul id="trashList" class="trash-list"></ul>
+            <div class="trash-footer">
+              <span class="trash-hint">Conservation : 30 jours</span>
+              <button id="emptyTrashBtn" class="btn-danger">Vider la corbeille</button>
             </div>
           </div>
         </div>

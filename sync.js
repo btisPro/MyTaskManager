@@ -165,15 +165,18 @@ async function gistGet(token, gistId) {
   if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
   const data = await res.json();
   const file = data.files && data.files[SYNC_FILENAME];
-  if (!file || !file.content) return [];
-  return JSON.parse(file.content);
+  if (!file || !file.content) return { tasks: [], trash: [] };
+  const parsed = JSON.parse(file.content);
+  // Compatibilité ancien format (tableau pur) → nouveau format { tasks, trash }
+  if (Array.isArray(parsed)) return { tasks: parsed, trash: [] };
+  return { tasks: parsed.tasks || [], trash: parsed.trash || [] };
 }
 
 /**
  * Envoie les tâches dans le Gist (PATCH = mise à jour).
  * @param {Task[]} tasks - Tâches à envoyer
  */
-async function gistPush(token, gistId, tasks) {
+async function gistPush(token, gistId, payload) {
   const res = await fetch(`https://api.github.com/gists/${gistId}`, {
     method: 'PATCH',
     headers: {
@@ -185,7 +188,7 @@ async function gistPush(token, gistId, tasks) {
     body: JSON.stringify({
       files: {
         [SYNC_FILENAME]: {
-          content: JSON.stringify(tasks, null, 2),
+          content: JSON.stringify(payload, null, 2),
         },
       },
     }),
@@ -213,14 +216,27 @@ async function syncBidirectional() {
   syncInProgress = true;
   setSyncStatus('syncing');
   try {
-    const local  = ensureTimestamps(JSON.parse(localStorage.getItem('tasks') || '[]'));
-    const remote = ensureTimestamps(await gistGet(token, gistId));
-    const merged = mergeTasks(local, remote);
+    const remote     = await gistGet(token, gistId);
+    const localTasks = ensureTimestamps(JSON.parse(localStorage.getItem('tasks') || '[]'));
+    const remTasks   = ensureTimestamps(remote.tasks || []);
+    const merged     = mergeTasks(localTasks, remTasks);
+
+    // Merge de la corbeille : union des deux listes, dédoublonnée par task.id
+    const localTrash = JSON.parse(localStorage.getItem('trash') || '[]');
+    const remTrash   = remote.trash || [];
+    const trashMap   = new Map();
+    [...remTrash, ...localTrash].forEach(e => trashMap.set(e.task.id, e));
+    const TRASH_TTL  = 30 * 24 * 60 * 60 * 1000;
+    const now        = Date.now();
+    const mergedTrash = Array.from(trashMap.values())
+      .filter(e => now - e.deletedAt < TRASH_TTL);
+
     localStorage.setItem('tasks', JSON.stringify(merged));
-    await gistPush(token, gistId, merged);
+    localStorage.setItem('trash', JSON.stringify(mergedTrash));
+    await gistPush(token, gistId, { tasks: merged, trash: mergedTrash });
     localStorage.setItem(KEY_SYNC_LAST, new Date().toISOString());
     setSyncStatus('ok');
-    return { ok: true, message: 'Synchronisation réussie.', tasks: merged };
+    return { ok: true, message: 'Synchronisation réussie.', tasks: merged, trash: mergedTrash };
   } catch (err) {
     setSyncStatus('error');
     return { ok: false, message: `Erreur : ${err.message}` };
@@ -242,8 +258,9 @@ async function syncPush() {
   setSyncStatus('syncing');
   try {
     const tasks = ensureTimestamps(JSON.parse(localStorage.getItem('tasks') || '[]'));
+    const trash = JSON.parse(localStorage.getItem('trash') || '[]');
     localStorage.setItem('tasks', JSON.stringify(tasks));
-    await gistPush(token, gistId, tasks);
+    await gistPush(token, gistId, { tasks, trash });
     localStorage.setItem(KEY_SYNC_LAST, new Date().toISOString());
     setSyncStatus('ok');
     return { ok: true, message: 'Données envoyées vers le Gist.' };
@@ -268,11 +285,14 @@ async function syncPull() {
   syncInProgress = true;
   setSyncStatus('syncing');
   try {
-    const remote = ensureTimestamps(await gistGet(token, gistId));
-    localStorage.setItem('tasks', JSON.stringify(remote));
+    const remote = await gistGet(token, gistId);
+    const tasks  = ensureTimestamps(remote.tasks || []);
+    const trash  = remote.trash || [];
+    localStorage.setItem('tasks', JSON.stringify(tasks));
+    localStorage.setItem('trash', JSON.stringify(trash));
     localStorage.setItem(KEY_SYNC_LAST, new Date().toISOString());
     setSyncStatus('ok');
-    return { ok: true, message: 'Données récupérées depuis le Gist.', tasks: remote };
+    return { ok: true, message: 'Données récupérées depuis le Gist.', tasks, trash };
   } catch (err) {
     setSyncStatus('error');
     return { ok: false, message: `Erreur : ${err.message}` };
@@ -295,7 +315,7 @@ function syncAuto(onSuccess) {
   syncDebounceTimer = setTimeout(async () => {
     const result = await syncBidirectional();
     if (result.ok && result.tasks && onSuccess) {
-      onSuccess(result.tasks);
+      onSuccess(result.tasks, result.trash);
     }
   }, SYNC_DEBOUNCE);
 }
@@ -405,7 +425,7 @@ function initSyncUI(onTasksUpdated) {
     logMsg('Synchronisation bidirectionnelle…');
     const result = await syncBidirectional();
     logMsg(result.message, result.ok ? 'ok' : 'error');
-    if (result.ok && result.tasks) onTasksUpdated(result.tasks);
+    if (result.ok && result.tasks) onTasksUpdated(result.tasks, result.trash);
   });
 
   syncPushBtn.addEventListener('click', async () => {
@@ -421,7 +441,7 @@ function initSyncUI(onTasksUpdated) {
     logMsg('Récupération des données distantes…');
     const result = await syncPull();
     logMsg(result.message, result.ok ? 'ok' : 'error');
-    if (result.ok && result.tasks) onTasksUpdated(result.tasks);
+    if (result.ok && result.tasks) onTasksUpdated(result.tasks, result.trash);
   });
 
   /* ── Clic sur l'indicateur de statut = sync forcée ── */
@@ -482,7 +502,7 @@ function _startIdleSyncWatcher() {
 
     const result = await syncBidirectional();
     if (result.ok && result.tasks && _onTasksUpdatedGlobal) {
-      _onTasksUpdatedGlobal(result.tasks);
+      _onTasksUpdatedGlobal(result.tasks, result.trash);
     }
   }, 60 * 1000);
 }
