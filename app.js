@@ -52,7 +52,45 @@ function saveTasks() {
    Synchronisée dans le Gist via la clé "trash".
 ════════════════════════════════════════════════════════════ */
 
-const TRASH_TTL = 30 * 24 * 60 * 60 * 1000; // 30 jours en ms
+const TRASH_TTL    = 30 * 24 * 60 * 60 * 1000; // 30 jours en ms
+const PURGED_TTL   = 60 * 24 * 60 * 60 * 1000; // 60 jours : garde les ids purgés assez longtemps
+
+/**
+ * Charge la liste des ids purgés définitivement depuis localStorage.
+ * Format : [ { id, purgedAt } ]
+ */
+function loadPurgedIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('purgedIds')) || [];
+    const now = Date.now();
+    return raw.filter(e => now - e.purgedAt < PURGED_TTL);
+  } catch { return []; }
+}
+
+/** Sauvegarde la liste des ids purgés dans localStorage. */
+function savePurgedIds() {
+  localStorage.setItem('purgedIds', JSON.stringify(purgedIds));
+}
+
+/**
+ * Enregistre un id (et tous les ids descendants d'une tâche) comme purgés,
+ * pour que la sync ne les ramène pas depuis le Gist.
+ */
+/** Collecte récursivement tous les ids d'une tâche et de ses descendants dans un Set. */
+function collectTaskIds(task, set) {
+  set.add(task.id);
+  (task.children || []).forEach(c => collectTaskIds(c, set));
+}
+
+function markPurged(task) {
+  const now = Date.now();
+  function collect(t) {
+    purgedIds.push({ id: t.id, purgedAt: now });
+    (t.children || []).forEach(collect);
+  }
+  collect(task);
+  savePurgedIds();
+}
 
 /** Charge la corbeille depuis localStorage et purge les entrées expirées. */
 function loadTrash() {
@@ -70,30 +108,38 @@ function saveTrash() {
 
 /**
  * Déplace une tâche vers la corbeille au lieu de la supprimer définitivement.
- * Retire la tâche de son tableau parent et l'ajoute à trashItems.
- * @param {Task}   task     - La tâche à mettre en corbeille
- * @param {Task[]} srcList  - Le tableau parent d'où retirer la tâche
- * @param {number|null} parentId - Id de la tâche parente (null = racine)
  */
 function trashTask(task, srcList, parentId) {
   const idx = srcList.findIndex(t => t.id === task.id);
   if (idx === -1) return;
   srcList.splice(idx, 1);
   trashItems.unshift({ task, parentId: parentId ?? null, deletedAt: Date.now() });
+
+  // Retire l'id (et ses descendants) de purgedIds : la tâche est en corbeille,
+  // pas définitivement supprimée — la sync ne doit pas l'exclure
+  const idsToUnpurge = new Set();
+  collectTaskIds(task, idsToUnpurge);
+  if (idsToUnpurge.size > 0) {
+    const before = purgedIds.length;
+    purgedIds = purgedIds.filter(e => !idsToUnpurge.has(e.id));
+    if (purgedIds.length !== before) savePurgedIds();
+  }
+
   saveTasks();
   saveTrash();
 }
 
 /**
- * Restaure une entrée de la corbeille.
- * Si le parent d'origine existe encore → insère en tête de sa liste children.
- * Sinon → insère en tête de rootTasks.
- * @param {object} entry - Entrée de corbeille { task, parentId, deletedAt }
+ * Restaure une entrée de la corbeille dans son emplacement d'origine.
  */
 function restoreTask(entry) {
   const idx = trashItems.indexOf(entry);
   if (idx === -1) return;
   trashItems.splice(idx, 1);
+
+  // Marque l'id comme purgé de la corbeille pour que la sync
+  // ne la ramène pas depuis le Gist (même logique que deleteForever)
+  markPurged(entry.task);
 
   const { task, parentId } = entry;
   task.children = task.children || [];
@@ -114,18 +160,25 @@ function restoreTask(entry) {
 
 /**
  * Supprime définitivement une entrée de la corbeille.
- * @param {object} entry - Entrée de corbeille
+ * Enregistre l'id dans purgedIds pour bloquer tout retour via sync.
  */
 function deleteForever(entry) {
   const idx = trashItems.indexOf(entry);
   if (idx !== -1) trashItems.splice(idx, 1);
+  markPurged(entry.task);
   saveTrash();
+  if (typeof syncAuto === 'function') syncAuto(onSyncUpdate);
 }
 
-/** Vide entièrement la corbeille (suppression définitive de tous les éléments). */
+/**
+ * Vide entièrement la corbeille.
+ * Enregistre tous les ids dans purgedIds pour bloquer tout retour via sync.
+ */
 function emptyTrash() {
+  trashItems.forEach(e => markPurged(e.task));
   trashItems.length = 0;
   saveTrash();
+  if (typeof syncAuto === 'function') syncAuto(onSyncUpdate);
 }
 
 /**
@@ -141,10 +194,39 @@ function onSyncUpdate(mergedTasks, mergedTrash) {
     mergedTrash.forEach(e => trashItems.push(e));
     updateTrashBadge();
   }
+  // Resynchronise purgedIds en mémoire avec ce que sync.js a écrit dans localStorage
+  purgedIds = loadPurgedIds();
+
+  // Préserve la vue courante : recalcule navigationStack avec les nouveaux rootTasks
+  // en gardant les mêmes taskId (si les tâches existent toujours)
+  const oldNavStack = navigationStack;
   navigationStack = [{ tasks: rootTasks, title: 'Tâches', taskId: null }];
-  activeTreeTaskId = null;
+
+  // Reconstruit la pile jusqu'à la tâche courante (si elle existe encore)
+  for (let i = 1; i < oldNavStack.length; i++) {
+    const taskId = oldNavStack[i].taskId;
+    if (!taskId) break; // tâche racine, on arrête
+
+    const task = findTaskById(rootTasks, taskId);
+    if (!task) {
+      // La tâche n'existe plus → retour à la pile précédente (dernier niveau valide)
+      activeTreeTaskId = navigationStack[navigationStack.length - 1].taskId || null;
+      renderTree();
+      return;
+    }
+
+    navigationStack.push({ tasks: task.children, title: task.text, taskId: task.id });
+  }
+
+  // La pile a été correctement reconstruite → affiche la vue correspondante
+  activeTreeTaskId = navigationStack[navigationStack.length - 1].taskId || null;
   renderTree();
-  showList();
+  if (navigationStack.length === 1) {
+    showList();
+  } else {
+    const currentTask = findTaskById(rootTasks, activeTreeTaskId);
+    if (currentTask) showDetail(currentTask); else showList();
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -156,6 +238,9 @@ let rootTasks = loadTasks();
 
 /** Tableau des tâches en corbeille : { task, parentId, deletedAt }[] */
 let trashItems = loadTrash();
+
+/** Ids supprimés définitivement : { id, purgedAt }[] — empêche la sync de les ramener */
+let purgedIds = loadPurgedIds();
 
 /**
  * Pile de navigation : chaque entrée représente un niveau de l'arborescence
@@ -190,6 +275,14 @@ let activeTreeTaskId = null;
  * Distinct de dragSrcIndex/dragListRef qui concernent le drag depuis la liste centrale.
  */
 let treeDragTaskId = null;
+
+/**
+ * Identifiant global de la tâche en cours de drag (toutes sources confondues).
+ * Nécessaire car dataTransfer.getData() retourne "" pendant dragover (restriction
+ * de sécurité navigateur) — on ne peut lire les données qu'au moment du drop.
+ * Cette variable permet à resolveDragSource de fonctionner pendant dragover.
+ */
+let activeDragTaskId = null;
 
 /**
  * Timer d'expansion automatique d'un nœud replié lorsqu'on survole
@@ -530,6 +623,7 @@ function buildTreeNodes(tasks, container, depth, filterInfo = null) {
       + (task.id === activeTreeTaskId ? ' active' : '')
       + (isMatch ? ' tree-match' : '');
     row.style.paddingLeft = (14 + depth * 16) + 'px';
+    row.dataset.taskId = task.id;
 
     const toggle = document.createElement('span');
     // En mode filtre, tous les nœuds visibles sont toujours dépliés
@@ -573,17 +667,25 @@ function buildTreeNodes(tasks, container, depth, filterInfo = null) {
 
     row.draggable = true;
     row.addEventListener('dragstart', (e) => {
-      treeDragTaskId = task.id;
+      treeDragTaskId  = task.id;
+      activeDragTaskId = task.id;
       row.classList.add('tree-dragging');
+      document.body.classList.add('dragging-active');
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('treeDragTaskId', String(task.id));
+      
+      const ghost = createDragGhost(task.text);
+      e.dataTransfer.setDragImage(ghost, -10, 8);
+      setTimeout(() => { const g = document.getElementById('dragGhost'); if (g) g.remove(); }, 0);
+      
       e.stopPropagation();
     });
     row.addEventListener('dragend', () => {
       row.classList.remove('tree-dragging');
+      document.body.classList.remove('dragging-active');
       clearTreeDropHighlight();
       clearExpandTimer();
-      setTimeout(() => { treeDragTaskId = null; }, 50);
+      setTimeout(() => { treeDragTaskId = null; activeDragTaskId = null; }, 50);
     });
 
     attachTreeDropHandlers(row, task, childContainer);
@@ -701,39 +803,87 @@ function showDetail(task) {
 }
 
 /**
- * Rend la vue détail draggable pour permettre de glisser la tâche courante
- * vers un nœud de l'arbre dans la sidebar.
- * Le dragstart est déclenché par un glisser depuis n'importe quel endroit
- * de la vue détail (hors éditeur Quill et champs de saisie).
+ * Crée et attache au DOM un élément drag-ghost compact (juste titre).
+ * L'élément est positionné hors-écran dans le DOM (setDragImage le capture).
+ * Il est supprimé automatiquement après dragstart via setTimeout(0).
+ * @param {string} taskText - Titre de la tâche
+ * @returns {HTMLElement} Élément à passer à setDragImage()
  */
+function createDragGhost(taskText) {
+  const ghost = document.createElement('div');
+  ghost.id = 'dragGhost';
+  const text = taskText.length > 35 ? taskText.slice(0, 32) + '…' : taskText;
+  ghost.textContent = text;
+  // Hors écran pour ne pas être vu (c'est une image drag, pas un vrai élément visible)
+  Object.assign(ghost.style, {
+    position:      'fixed',
+    top:           '-9999px',
+    left:          '-9999px',
+    background:    '#f8f9ff',
+    border:        '2px solid #4f46e5',
+    borderRadius:  '8px',
+    padding:       '8px 12px',
+    fontSize:      '0.9rem',
+    fontWeight:    '600',
+    color:         '#1a1a2e',
+    whiteSpace:    'nowrap',
+    boxShadow:     '0 4px 12px rgba(79,70,229,0.25)',
+    pointerEvents: 'none',
+    zIndex:        '99999',
+    maxWidth:      '280px',
+    overflow:      'hidden',
+    textOverflow:  'ellipsis',
+  });
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
 function setupDetailDrag() {
   detailView.draggable = true;
 
-  // Sur mobile, désactiver le draggable quand Quill a le focus
-  // pour éviter que le touch déclenche un drag et vole le focus.
   const qlEditor = detailView.querySelector('#quillEditor');
   if (qlEditor) {
     qlEditor.addEventListener('focusin',  () => { detailView.draggable = false; });
     qlEditor.addEventListener('focusout', () => { detailView.draggable = true;  });
   }
 
+  // Nettoyage de fin de drag — sur document car pointer-events:none
+  // sur detailView pendant le drag empêche l'élément de recevoir dragend
+  function onDetailDragEnd() {
+    document.body.classList.remove('dragging-active');
+    detailView.classList.remove('detail-dragging', 'detail-dragging-active');
+    clearTreeDropHighlight();
+    clearExpandTimer();
+    activeDragTaskId = null;
+    document.removeEventListener('dragend', onDetailDragEnd);
+  }
+
   detailView.addEventListener('dragstart', (e) => {
-    // Ne pas interférer avec les éléments interactifs internes
     if (e.target.closest('.ql-editor, input, textarea, button, .task-item')) {
       e.preventDefault();
       return;
     }
     if (!currentNoteTaskId) return;
+
+    const task = findTaskById(rootTasks, currentNoteTaskId);
+    if (task) {
+      const ghost = createDragGhost(task.text);
+      // Offset négatif en X pour que l'image soit à droite du curseur
+      e.dataTransfer.setDragImage(ghost, -10, 8);
+      // Supprime le ghost du DOM après que le navigateur l'ait capturé
+      setTimeout(() => { const g = document.getElementById('dragGhost'); if (g) g.remove(); }, 0);
+    }
+
     e.dataTransfer.setData('detailDragTaskId', String(currentNoteTaskId));
     e.dataTransfer.effectAllowed = 'move';
+    activeDragTaskId = currentNoteTaskId;
+    document.body.classList.add('dragging-active');
     detailView.classList.add('detail-dragging');
+    setTimeout(() => detailView.classList.add('detail-dragging-active'), 0);
+    document.addEventListener('dragend', onDetailDragEnd);
   });
 
-  detailView.addEventListener('dragend', () => {
-    detailView.classList.remove('detail-dragging');
-    clearTreeDropHighlight();
-    clearExpandTimer();
-  });
+  detailView.addEventListener('dragend', onDetailDragEnd);
 }
 
 /** Affiche la vue résultats de recherche. */
@@ -907,8 +1057,8 @@ function renderList(listEl, tasks, searchResultMode = false) {
 function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   const li = document.createElement('li');
   li.className = 'task-item';
-  li.draggable = !searchResultMode; // drag désactivé en mode recherche
-  li.dataset.index = index;
+  li.draggable = true;
+  li.dataset.taskId = task.id;
 
   // ── Rang #N ────────────────────────────────────────────
   const rank = document.createElement('span');
@@ -989,9 +1139,7 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   });
 
   // Menu contextuel (clic droit) — désactivé en mode recherche
-  if (!searchResultMode) {
-    li.addEventListener('contextmenu', (e) => showContextMenu(e, task, tasks, listEl));
-  }
+  li.addEventListener('contextmenu', (e) => showContextMenu(e, task, tasks, listEl));
 
   // Icône 📋 : navigue vers le détail (ou vers la tâche dans l'arbre si mode recherche)
   noteIcon.addEventListener('click', (e) => {
@@ -1014,42 +1162,65 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
     else { renderList(listEl, tasks); renderTree(); }
   });
 
-  // ── Drag & Drop intra-liste ───────────────────────────
-  // Permet de réordonner les tâches dans la même liste par glisser-déposer.
-  if (!searchResultMode) {
-    li.addEventListener('dragstart', function(e) {
-      dragSrcIndex = index;
+  // ── Drag & Drop ───────────────────────────────────────
+  // dragstart : toujours actif (drag vers l'arbre possible même en mode recherche)
+  li.addEventListener('dragstart', function(e) {
+    this.classList.add('dragging');
+    document.body.classList.add('dragging-active');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('taskId', String(task.id));
+    activeDragTaskId = task.id;
+    
+    const ghost = createDragGhost(task.text);
+    e.dataTransfer.setDragImage(ghost, -10, 8);
+    setTimeout(() => { const g = document.getElementById('dragGhost'); if (g) g.remove(); }, 0);
+    
+    if (!searchResultMode) {
+      dragSrcIndex = task.id; // on stocke l'id, pas l'index de rendu
       dragListRef  = tasks;
-      this.classList.add('dragging');
-      e.dataTransfer.effectAllowed = 'move';
-      // On stocke l'id dans dataTransfer pour le récupérer dans les drop handlers de l'arbre
-      e.dataTransfer.setData('taskId', String(task.id));
-    });
+    }
+  });
 
+  li.addEventListener('dragend', function() {
+    document.body.classList.remove('dragging-active');
+    listEl.querySelectorAll('.task-item').forEach(el => el.classList.remove('dragging', 'drag-over'));
+    clearTreeDropHighlight();
+    dragSrcIndex     = null;
+    dragListRef      = null;
+    activeDragTaskId = null;
+  });
+
+  // dragover/drop intra-liste : uniquement hors mode recherche
+  // et uniquement si la source est bien cette même liste (réordonnement)
+  if (!searchResultMode) {
     li.addEventListener('dragover', function(e) {
+      // N'accepte le drop que si la source est cette liste (réordonnement intra-liste)
+      if (dragListRef !== tasks) return;
       e.preventDefault();
-      // Retire le highlight de tous les items et le remet sur celui survolé
+      // Pas de stopPropagation : l'événement doit pouvoir atteindre les tree-row
+      // de la sidebar quand le curseur s'y trouve (highlight du nœud cible)
       listEl.querySelectorAll('.task-item').forEach(el => el.classList.remove('drag-over'));
       this.classList.add('drag-over');
     });
 
     li.addEventListener('drop', function(e) {
+      if (dragListRef !== tasks) return; // drop venant d'ailleurs → on laisse passer
       e.preventDefault();
-      const dest = parseInt(this.dataset.index);
-      // On ignore si même index, même origine, ou liste différente
-      if (dragSrcIndex === null || dragSrcIndex === dest || dragListRef !== tasks) return;
-      const [moved] = tasks.splice(dragSrcIndex, 1);
-      tasks.splice(dest, 0, moved);
+      e.stopPropagation();
+      const destId  = parseInt(this.dataset.taskId);
+      const srcId   = dragSrcIndex; // contient l'id de la tâche source
+      if (!srcId || srcId === destId) return;
+      // Retrouve les positions réelles dans le tableau au moment du drop
+      const srcIdx  = tasks.findIndex(t => t.id === srcId);
+      const destIdx = tasks.findIndex(t => t.id === destId);
+      if (srcIdx === -1 || destIdx === -1) return;
+      const [moved] = tasks.splice(srcIdx, 1);
+      tasks.splice(destIdx, 0, moved);
+      dragSrcIndex = null;
+      dragListRef  = null;
       saveTasks();
       renderList(listEl, tasks);
       renderTree();
-    });
-
-    li.addEventListener('dragend', function() {
-      listEl.querySelectorAll('.task-item').forEach(el => el.classList.remove('dragging', 'drag-over'));
-      clearTreeDropHighlight();
-      dragSrcIndex = null;
-      dragListRef  = null;
     });
   }
 
@@ -1058,8 +1229,8 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
 
 /* ═══════════════════════════════════════════════════════════
    TREE DROP — Déplacer une tâche vers un nœud de l'arbre
-   Permet de changer l'affectation d'une tâche dans l'arborescence
-   par glisser-déposer depuis la liste centrale vers la sidebar.
+   Event delegation sur sidebarTree : un seul handler dragover/drop
+   sur le conteneur, qui identifie la tree-row cible via closest().
 ════════════════════════════════════════════════════════════ */
 
 /** Retire la mise en surbrillance de drop sur tous les nœuds de l'arbre. */
@@ -1073,52 +1244,31 @@ function clearExpandTimer() {
 }
 
 /**
- * Vérifie si ancestorId est un ancêtre (ou lui-même) de taskId dans l'arbre.
+ * Vérifie si `taskId` est un descendant (ou lui-même) de `ancestorId`.
  * Utilisé pour interdire le drop d'une tâche sur l'un de ses propres descendants.
  */
-function isAncestorOrSelf(taskId, ancestorId, list) {
+function isDescendantOrSelf(taskId, ancestorId, list) {
   for (const t of list) {
     if (t.id === ancestorId) return findTaskById([t], taskId) !== null;
-    if (isAncestorOrSelf(taskId, ancestorId, t.children)) return true;
+    if (isDescendantOrSelf(taskId, ancestorId, t.children)) return true;
   }
   return false;
 }
 
 /**
- * Résout l'id de la tâche source depuis un événement drag.
- * Gère trois sources possibles :
- *   1. Drag depuis l'arbre         → dataTransfer "treeDragTaskId"
- *   2. Drag depuis la liste centrale→ dragListRef[dragSrcIndex]
- *   3. Drag depuis la vue détail   → dataTransfer "detailDragTaskId"
- * Retourne { srcId, srcTask, srcList } ou null si invalide.
+ * Résout la tâche source depuis les variables globales de drag.
+ * Retourne { srcId, srcTask, srcList } ou null.
  */
-function resolveDragSource(e) {
-  // Source : arbre
-  const treeId = parseInt(e.dataTransfer.getData('treeDragTaskId'));
-  if (treeId) {
-    const srcTask = findTaskById(rootTasks, treeId);
-    const srcList = findParentList(rootTasks, treeId);
-    return srcTask && srcList ? { srcId: treeId, srcTask, srcList } : null;
-  }
-  // Source : vue détail (la tâche couramment affichée)
-  const detailId = parseInt(e.dataTransfer.getData('detailDragTaskId'));
-  if (detailId) {
-    const srcTask = findTaskById(rootTasks, detailId);
-    const srcList = findParentList(rootTasks, detailId);
-    return srcTask && srcList ? { srcId: detailId, srcTask, srcList } : null;
-  }
-  // Source : liste centrale
-  if (dragListRef !== null && dragSrcIndex !== null) {
-    const srcTask = dragListRef[dragSrcIndex];
-    return srcTask ? { srcId: srcTask.id, srcTask, srcList: dragListRef } : null;
-  }
-  return null;
+function resolveDragSource() {
+  const id = treeDragTaskId || activeDragTaskId;
+  if (!id) return null;
+  const srcTask = findTaskById(rootTasks, id);
+  const srcList = findParentList(rootTasks, id);
+  return srcTask && srcList ? { srcId: id, srcTask, srcList } : null;
 }
 
 /**
- * Trouve le tableau parent qui contient directement la tâche dont l'id est donné.
- * Retourne null si non trouvé (par exemple si la tâche est à la racine,
- * retourne rootTasks).
+ * Trouve le tableau parent qui contient directement la tâche d'id donné.
  */
 function findParentList(list, id) {
   for (const t of list) {
@@ -1131,145 +1281,174 @@ function findParentList(list, id) {
 
 /**
  * Effectue le déplacement effectif d'une tâche vers une liste cible.
- * Retire la tâche de sa liste source, l'insère en tête de la liste cible.
- * Rafraîchit la vue courante et l'arbre.
- *
- * @param {object} src        - { srcTask, srcList } issu de resolveDragSource
- * @param {Task[]} targetList - Tableau dans lequel insérer la tâche
- * @param {number|null} targetTaskId - Id du nœud cible (pour l'expansion), null si racine
+ * @param {object}      src          - { srcTask, srcList }
+ * @param {Task[]}      targetList   - Tableau cible
+ * @param {number|null} targetTaskId - Id du nœud cible (null = racine)
  */
 function performTreeDrop(src, targetList, targetTaskId) {
-  // Interdit de dropper dans ses propres enfants
-  if (targetTaskId && isAncestorOrSelf(targetTaskId, src.srcId, rootTasks)) return;
-  // Interdit de dropper dans son propre tableau (sans changement de niveau)
+  if (targetTaskId && isDescendantOrSelf(targetTaskId, src.srcId, rootTasks)) return;
   if (src.srcList === targetList) return;
 
-  // Retire de la source
   const idx = src.srcList.indexOf(src.srcTask);
   if (idx === -1) return;
   src.srcList.splice(idx, 1);
-
-  // Insère en tête de la cible (priorité maximale dans ce niveau)
   targetList.unshift(src.srcTask);
 
-  // Déploie le nœud cible si replié
   if (targetTaskId) {
     treeCollapsed[targetTaskId] = false;
     localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
   }
 
   saveTasks();
-  dragSrcIndex = null;
-  dragListRef  = null;
+  dragSrcIndex     = null;
+  dragListRef      = null;
+  activeDragTaskId = null;
+  treeDragTaskId   = null;
 
-  // Si la vue détail affichait la tâche déplacée ou l'une de ses parentes,
-  // on revient à la liste racine pour éviter un état incohérent
-  const movedIsCurrentOrAncestor = navigationStack.some(e => e.taskId === src.srcId);
-  if (movedIsCurrentOrAncestor) {
+  const movedIsCurrentTask = navigationStack.length > 1 &&
+    navigationStack[navigationStack.length - 1].taskId === src.srcId;
+  if (movedIsCurrentTask) {
+    navigationStack.pop();
+    const parentEntry = navigationStack[navigationStack.length - 1];
+    if (parentEntry.taskId) {
+      const parentTask = findTaskById(rootTasks, parentEntry.taskId);
+      activeTreeTaskId = parentEntry.taskId;
+      renderTree();
+      if (parentTask) showDetail(parentTask); else showList();
+    } else {
+      activeTreeTaskId = null;
+      renderTree();
+      showList();
+    }
+    return;
+  }
+
+  const movedIsAncestor = navigationStack.some(e => e.taskId === src.srcId);
+  if (movedIsAncestor) {
     navigationStack = [{ tasks: rootTasks, title: 'Tâches', taskId: null }];
     activeTreeTaskId = null;
     renderTree();
     showList();
   } else {
-    const currentEntry  = navigationStack[navigationStack.length - 1];
-    const currentListEl = navigationStack.length === 1 ? taskListEl : subTaskListEl;
-    renderList(currentListEl, currentEntry.tasks);
     renderTree();
+    if (navigationStack.length === 1) {
+      renderList(taskListEl, rootTasks);
+    } else {
+      const currentEntry = navigationStack[navigationStack.length - 1];
+      const currentTask = findTaskById(rootTasks, currentEntry.taskId);
+      if (currentTask) {
+        currentEntry.tasks = currentTask.children;
+        renderList(subTaskListEl, currentTask.children);
+      } else {
+        navigationStack = [{ tasks: rootTasks, title: 'Tâches', taskId: null }];
+        activeTreeTaskId = null;
+        renderTree();
+        showList();
+      }
+    }
   }
 }
 
 /**
- * Attache les événements dragover/dragleave/drop sur un nœud de l'arbre.
- * Gère :
- *   - le highlight de drop
- *   - le timer d'expansion automatique (EXPAND_DELAY ms de survol)
- *   - l'exécution du déplacement au drop
- *
- * @param {HTMLElement} row           - L'élément .tree-row cible
- * @param {Task}        targetTask    - La tâche représentée par ce nœud
- * @param {HTMLElement} childContainer- Le .tree-children de ce nœud (pour l'expansion)
+ * Initialise la gestion drop de la sidebar via event delegation.
+ * Appelé une seule fois à l'init — robuste aux re-renders de renderTree().
  */
-function attachTreeDropHandlers(row, targetTask, childContainer) {
-  row.addEventListener('dragover', (e) => {
-    const src = resolveDragSource(e);
+function initTreeDropDelegation() {
+  // Stocke la tree-row actuellement survolée pour gérer dragleave proprement
+  let currentDropRow = null;
+
+  sidebarTree.addEventListener('dragover', (e) => {
+    if (!activeDragTaskId && !treeDragTaskId) return;
+
+    const row = e.target.closest('.tree-row');
+    if (!row) { clearTreeDropHighlight(); clearExpandTimer(); return; }
+
+    const src = resolveDragSource();
     if (!src) return;
-    if (isAncestorOrSelf(targetTask.id, src.srcId, rootTasks)) return;
-    if (src.srcList === targetTask.children) return; // déjà enfant direct
+
+    // Détermine la cible (racine ou nœud)
+    const isRoot = row.classList.contains('tree-root-node');
+    let targetList, targetTaskId, targetTask;
+
+    if (isRoot) {
+      if (src.srcList === rootTasks) return; // déjà à la racine
+      targetList   = rootTasks;
+      targetTaskId = null;
+    } else {
+      const taskId = parseInt(row.dataset.taskId);
+      if (!taskId) return;
+      targetTask = findTaskById(rootTasks, taskId);
+      if (!targetTask) return;
+      if (isDescendantOrSelf(taskId, src.srcId, rootTasks)) return;
+      if (src.srcList === targetTask.children) return;
+      targetList   = targetTask.children;
+      targetTaskId = taskId;
+    }
+
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    clearTreeDropHighlight();
-    row.classList.add('drop-target');
 
-    // Lance le timer d'expansion si le nœud est replié et a des enfants
-    if (treeCollapsed[targetTask.id] && targetTask.children.length > 0) {
+    if (currentDropRow !== row) {
+      clearTreeDropHighlight();
+      clearExpandTimer();
+      currentDropRow = row;
+      row.classList.add('drop-target');
+    }
+
+    // Timer d'expansion automatique des nœuds repliés
+    if (targetTask && treeCollapsed[targetTaskId] && targetTask.children.length > 0) {
       if (!expandTimer) {
         expandTimer = setTimeout(() => {
-          treeCollapsed[targetTask.id] = false;
+          treeCollapsed[targetTaskId] = false;
           localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
+          const childContainer = row.closest('.tree-node')?.querySelector('.tree-children');
           if (childContainer) childContainer.classList.remove('collapsed');
-          // Met à jour le toggle visuellement
           const toggle = row.querySelector('.tree-toggle');
           if (toggle) toggle.className = 'tree-toggle open';
           expandTimer = null;
         }, EXPAND_DELAY);
       }
+    } else if (!targetTask || !treeCollapsed[targetTaskId]) {
+      clearExpandTimer();
+    }
+  });
+
+  sidebarTree.addEventListener('dragleave', (e) => {
+    if (!sidebarTree.contains(e.relatedTarget)) {
+      clearTreeDropHighlight();
+      clearExpandTimer();
+      currentDropRow = null;
+    }
+  });
+
+  sidebarTree.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearExpandTimer();
+    clearTreeDropHighlight();
+    currentDropRow = null;
+
+    const src = resolveDragSource();
+    if (!src) return;
+
+    const row = e.target.closest('.tree-row');
+    if (!row) return;
+
+    if (row.classList.contains('tree-root-node')) {
+      if (src.srcList !== rootTasks) performTreeDrop(src, rootTasks, null);
     } else {
-      clearExpandTimer();
+      const taskId = parseInt(row.dataset.taskId);
+      if (!taskId) return;
+      const targetTask = findTaskById(rootTasks, taskId);
+      if (!targetTask) return;
+      performTreeDrop(src, targetTask.children, taskId);
     }
-  });
-
-  row.addEventListener('dragleave', (e) => {
-    // Ne nettoie que si on quitte vraiment la row (pas vers un enfant)
-    if (!row.contains(e.relatedTarget)) {
-      row.classList.remove('drop-target');
-      clearExpandTimer();
-    }
-  });
-
-  row.addEventListener('drop', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    clearExpandTimer();
-    clearTreeDropHighlight();
-    const src = resolveDragSource(e);
-    if (!src) return;
-    performTreeDrop(src, targetTask.children, targetTask.id);
   });
 }
 
-/**
- * Attache les événements drop sur le nœud racine de la sidebar.
- * Déplace une tâche au niveau racine (rootTasks), en tête.
- * @param {HTMLElement} rootRow - L'élément .tree-row racine
- */
-function attachRootDropHandlers(rootRow) {
-  rootRow.addEventListener('dragover', (e) => {
-    const src = resolveDragSource(e);
-    if (!src) return;
-    if (src.srcList === rootTasks) return; // déjà à la racine
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    clearTreeDropHighlight();
-    rootRow.classList.add('drop-target');
-    clearExpandTimer();
-  });
-
-  rootRow.addEventListener('dragleave', (e) => {
-    if (!rootRow.contains(e.relatedTarget)) {
-      rootRow.classList.remove('drop-target');
-    }
-  });
-
-  rootRow.addEventListener('drop', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    clearExpandTimer();
-    clearTreeDropHighlight();
-    const src = resolveDragSource(e);
-    if (!src || src.srcList === rootTasks) return;
-    performTreeDrop(src, rootTasks, null);
-  });
-}
+/** No-op : les drop handlers sont désormais gérés par initTreeDropDelegation(). */
+function attachTreeDropHandlers(row, targetTask, childContainer) {}
+function attachRootDropHandlers(rootRow) {}
 
 /* ═══════════════════════════════════════════════════════════
    TITLE EDIT — Édition inline du titre dans la vue détail
@@ -1301,11 +1480,10 @@ function startEditTitle(task) {
     detailTitle.onclick = () => startEditTitle(task);
     renderBreadcrumb();
     renderTree();
-    // Rafraîchit la liste parente pour mettre à jour le texte visible
-    const parentListEl = navigationStack.length === 1 ? taskListEl : subTaskListEl;
-    const parentTasks  = navigationStack.length > 1
-      ? navigationStack[navigationStack.length - 2].tasks : rootTasks;
-    renderList(parentListEl, parentTasks);
+    // Rafraîchit la liste racine en arrière-plan (elle est masquée mais doit être à jour)
+    // La liste de sous-tâches (subTaskListEl) n'est pas touchée : elle affiche déjà
+    // correctement les enfants de la tâche courante.
+    renderList(taskListEl, rootTasks);
   }
 
   input.addEventListener('blur', commit);
@@ -1796,7 +1974,8 @@ if (typeof initWelcomeModal === 'function') {
   initWelcomeModal();
 }
 
-initTrashUI();       // initialise la modale corbeille
-updateTrashBadge();  // affiche le badge si des éléments sont en corbeille
-renderTree();        // construit l'arborescence dans la sidebar
-showList();          // affiche la liste principale des tâches
+initTrashUI();             // initialise la modale corbeille
+updateTrashBadge();        // affiche le badge si des éléments sont en corbeille
+initTreeDropDelegation();  // gestion drop sidebar via event delegation (une seule fois)
+renderTree();              // construit l'arborescence dans la sidebar
+showList();                // affiche la liste principale des tâches

@@ -101,37 +101,72 @@ function touchTask(tasks, taskId) {
 ════════════════════════════════════════════════════════════ */
 
 /**
- * Fusionne deux listes de tâches.
- * @param {Task[]} local  - Tâches locales
- * @param {Task[]} remote - Tâches distantes (Gist)
- * @returns {Task[]} Liste fusionnée
+ * Collecte récursivement tous les ids présents dans un arbre de tâches.
  */
-function mergeTasks(local, remote) {
+function collectAllIds(tasks, out = new Set()) {
+  for (const t of tasks) {
+    out.add(t.id);
+    if (t.children && t.children.length) collectAllIds(t.children, out);
+  }
+  return out;
+}
+
+/**
+ * Fusionne deux arbres de tâches.
+ *
+ * Stratégie :
+ *  - Si une tâche existe des deux côtés à ce niveau → last-write-wins sur les champs,
+ *    merge récursif des enfants.
+ *  - Si une tâche n'existe que côté distant → elle est ignorée si elle est
+ *    présente ailleurs dans l'arbre local (= déplacée) ou en corbeille (= supprimée).
+ *    Sinon elle est conservée (= créée sur un autre appareil).
+ *  - Si une tâche n'existe que côté local → elle est conservée (ajout local ou déplacement).
+ *
+ * @param {Task[]} local      - Tâches locales à ce niveau
+ * @param {Task[]} remote     - Tâches distantes à ce niveau
+ * @param {Set}    deletedIds - Ids en corbeille locale (supprimés)
+ * @param {Set}    localAllIds- Tous les ids présents dans l'arbre local complet
+ */
+function mergeTasks(local, remote, deletedIds = new Set(), localAllIds = new Set()) {
   const localMap  = new Map(local.map(t => [t.id, t]));
   const remoteMap = new Map(remote.map(t => [t.id, t]));
   const allIds    = new Set([...localMap.keys(), ...remoteMap.keys()]);
   const merged    = [];
 
   for (const id of allIds) {
+    // Tâche supprimée localement → ignorée partout
+    if (deletedIds.has(id)) continue;
+
     const l = localMap.get(id);
     const r = remoteMap.get(id);
 
     if (l && r) {
-      // Conflit : on garde la version la plus récente
+      // Présente des deux côtés : last-write-wins sur les champs, merge récursif des enfants
       const winner = (l.updatedAt || 0) >= (r.updatedAt || 0) ? l : r;
-      // Merge récursif des enfants
       merged.push({
         ...winner,
-        children: mergeTasks(l.children || [], r.children || []),
+        children: mergeTasks(l.children || [], r.children || [], deletedIds, localAllIds),
+      });
+    } else if (l) {
+      // Présente uniquement en local : ajout local ou déplacement depuis distant → on garde
+      merged.push({
+        ...l,
+        children: mergeTasks(l.children || [], [], deletedIds, localAllIds),
       });
     } else {
-      // Présent d'un seul côté : on le conserve
-      const task = l || r;
-      merged.push({ ...task, children: task.children || [] });
+      // Présente uniquement côté distant
+      // Si l'id existe quelque part dans l'arbre local → c'est un déplacement local,
+      // la tâche sera placée correctement à son nouvel emplacement → on l'ignore ici
+      if (localAllIds.has(id)) continue;
+      // Sinon c'est une nouveauté distante (autre appareil) → on la conserve
+      merged.push({
+        ...r,
+        children: mergeTasks([], r.children || [], deletedIds, localAllIds),
+      });
     }
   }
 
-  // Tri : on respecte l'ordre local en priorité, sinon l'ordre distant
+  // Tri : ordre local en priorité, sinon ordre distant
   const localOrder  = local.map(t => t.id);
   const remoteOrder = remote.map(t => t.id);
   merged.sort((a, b) => {
@@ -165,11 +200,11 @@ async function gistGet(token, gistId) {
   if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
   const data = await res.json();
   const file = data.files && data.files[SYNC_FILENAME];
-  if (!file || !file.content) return { tasks: [], trash: [] };
+  if (!file || !file.content) return { tasks: [], trash: [], purgedIds: [] };
   const parsed = JSON.parse(file.content);
-  // Compatibilité ancien format (tableau pur) → nouveau format { tasks, trash }
-  if (Array.isArray(parsed)) return { tasks: parsed, trash: [] };
-  return { tasks: parsed.tasks || [], trash: parsed.trash || [] };
+  // Compatibilité ancien format (tableau pur) → nouveau format { tasks, trash, purgedIds }
+  if (Array.isArray(parsed)) return { tasks: parsed, trash: [], purgedIds: [] };
+  return { tasks: parsed.tasks || [], trash: parsed.trash || [], purgedIds: parsed.purgedIds || [] };
 }
 
 /**
@@ -219,21 +254,44 @@ async function syncBidirectional() {
     const remote     = await gistGet(token, gistId);
     const localTasks = ensureTimestamps(JSON.parse(localStorage.getItem('tasks') || '[]'));
     const remTasks   = ensureTimestamps(remote.tasks || []);
-    const merged     = mergeTasks(localTasks, remTasks);
+
+    // Construit le set des ids supprimés localement (corbeille) AVANT le merge
+    // pour que mergeTasks puisse exclure ces tâches venues du distant
+    const localTrash  = JSON.parse(localStorage.getItem('trash') || '[]');
+    // Collecte les ids de TOUTES les tâches en corbeille, y compris leurs descendants
+    const deletedIds  = new Set();
+    localTrash.forEach(e => collectAllIds([e.task], deletedIds));
+    const localAllIds = collectAllIds(localTasks);
+
+    const merged = mergeTasks(localTasks, remTasks, deletedIds, localAllIds);
 
     // Merge de la corbeille : union des deux listes, dédoublonnée par task.id
-    const localTrash = JSON.parse(localStorage.getItem('trash') || '[]');
     const remTrash   = remote.trash || [];
     const trashMap   = new Map();
     [...remTrash, ...localTrash].forEach(e => trashMap.set(e.task.id, e));
+
+    // Charge les ids purgés définitivement pour les exclure de la corbeille mergée
+    const localPurged    = JSON.parse(localStorage.getItem('purgedIds') || '[]');
+    const purgedIdsSet   = new Set(localPurged.map(e => e.id));
+
     const TRASH_TTL  = 30 * 24 * 60 * 60 * 1000;
     const now        = Date.now();
     const mergedTrash = Array.from(trashMap.values())
-      .filter(e => now - e.deletedAt < TRASH_TTL);
+      .filter(e => now - e.deletedAt < TRASH_TTL)
+      .filter(e => !purgedIdsSet.has(e.task.id));
+
+    // Merge des purgedIds : union locale + distante, filtrée par TTL
+    const remotePurged  = remote.purgedIds || [];
+    const purgedMap     = new Map();
+    [...remotePurged, ...localPurged].forEach(e => purgedMap.set(e.id, e));
+    const PURGED_TTL    = 60 * 24 * 60 * 60 * 1000;
+    const mergedPurged  = Array.from(purgedMap.values())
+      .filter(e => now - e.purgedAt < PURGED_TTL);
+    localStorage.setItem('purgedIds', JSON.stringify(mergedPurged));
 
     localStorage.setItem('tasks', JSON.stringify(merged));
     localStorage.setItem('trash', JSON.stringify(mergedTrash));
-    await gistPush(token, gistId, { tasks: merged, trash: mergedTrash });
+    await gistPush(token, gistId, { tasks: merged, trash: mergedTrash, purgedIds: mergedPurged });
     localStorage.setItem(KEY_SYNC_LAST, new Date().toISOString());
     setSyncStatus('ok');
     return { ok: true, message: 'Synchronisation réussie.', tasks: merged, trash: mergedTrash };

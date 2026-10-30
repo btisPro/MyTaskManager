@@ -176,16 +176,25 @@ body {
 
 /* Nœud en cours de drag depuis l'arbre */
 .tree-row.tree-dragging {
-  opacity: 0.4;
+  opacity: 0.05;
   cursor: grabbing;
+  pointer-events: none;
 }
 
 /* Nœud cible de drop valide */
 .tree-row.drop-target {
-  background: rgba(99,102,241,0.45);
-  outline: 2px dashed #818cf8;
-  outline-offset: -2px;
+  background: rgba(99,102,241,0.65);
+  outline: 3px solid #818cf8;
+  outline-offset: -3px;
   color: #fff;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3), 0 0 8px rgba(129,140,248,0.5);
+  animation: dropPulse 0.6s ease-in-out infinite;
+}
+
+@keyframes dropPulse {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3), 0 0 8px rgba(129,140,248,0.5); }
+  50%      { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5), 0 0 12px rgba(129,140,248,0.8); }
 }
 
 /* Curseur grab sur les nœuds de l'arbre (indique qu'on peut les déplacer) */
@@ -194,6 +203,13 @@ body {
 }
 .tree-row[draggable="true"]:active {
   cursor: grabbing;
+}
+
+/* Pendant un drag global : désactive pointer-events sur les enfants des tree-row
+   pour éviter les faux dragleave quand la souris survole un span ou un bouton interne */
+body.dragging-active .tree-row > *,
+body.dragging-active .tree-root-node > * {
+  pointer-events: none;
 }
 
 .tree-root-node {
@@ -206,15 +222,12 @@ body {
 }
 .tree-root-node.active { background: var(--sidebar-active); color: #fff; }
 .tree-root-node.drop-target {
-  background: rgba(99,102,241,0.45);
-  outline: 2px dashed #818cf8;
-  outline-offset: -2px;
-}
-.tree-row.drop-target {
-  background: rgba(99,102,241,0.45);
-  outline: 2px dashed #818cf8;
-  outline-offset: -2px;
-  color: #fff;
+  background: rgba(99,102,241,0.65);
+  outline: 3px solid #818cf8;
+  outline-offset: -3px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3), 0 0 8px rgba(129,140,248,0.5);
+  animation: dropPulse 0.6s ease-in-out infinite;
 }
 
 .tree-toggle {
@@ -699,9 +712,14 @@ h2:hover { color: var(--accent); }
   cursor: grab;
 }
 
-/* Pendant le drag : légère transparence pour indiquer le déplacement */
+/* Pendant le drag depuis la vue détail : opacity réduite */
 #detailView.detail-dragging {
-  opacity: 0.85;
+  opacity: 0.4;
+}
+/* pointer-events:none appliqué dynamiquement via JS (classe ajoutée après dragstart)
+   pour ne pas bloquer l'événement dragstart lui-même */
+#detailView.detail-dragging-active {
+  pointer-events: none;
 }
 
 /* Les zones interactives internes gardent leur curseur propre */
