@@ -473,7 +473,27 @@ h2:hover { color: var(--accent); }
 }
 .task-item:active { cursor: grabbing; }
 .task-item.dragging { opacity: 0.4; border-color: var(--accent); }
-.task-item.drag-over { border-color: var(--accent); background: var(--accent-light); }
+
+/* Ligne d'insertion : indique entre quelles tâches le drop va avoir lieu */
+.task-item.drop-before,
+.task-item.drop-after {
+  position: relative;
+}
+.task-item.drop-before::before,
+.task-item.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 6px rgba(79,70,229,0.5);
+  z-index: 10;
+  pointer-events: none;
+}
+.task-item.drop-before::before { top: -3px; }
+.task-item.drop-after::after  { bottom: -3px; }
 
 .task-rank {
   font-size: 0.7rem;

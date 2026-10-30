@@ -859,7 +859,10 @@ function setupDetailDrag() {
   }
 
   detailView.addEventListener('dragstart', (e) => {
-    if (e.target.closest('.ql-editor, input, textarea, button, .task-item')) {
+    // Si le drag vient d'un li de sous-tâche ou d'un champ de saisie,
+    // on laisse leur propre dragstart gérer l'événement sans l'annuler
+    if (e.target.closest('.task-item')) return;
+    if (e.target.closest('.ql-editor, input, textarea, button')) {
       e.preventDefault();
       return;
     }
@@ -987,19 +990,27 @@ function showContextMenu(e, task, tasks, listEl) {
     li.textContent = label;
     li.addEventListener('click', () => {
       hideContextMenu();
-      const idx = tasks.findIndex(t => t.id === task.id);
+      // Retrouve le vrai tableau parent (en mode recherche, `tasks` est un tableau
+      // de résultats temporaire — pas le vrai parent de la tâche)
+      const realList = findParentList(rootTasks, task.id) || tasks;
+      const idx = realList.findIndex(t => t.id === task.id);
       if (idx === -1) return;
-      // Calcul du nouvel index en clampant dans [0, length-1]
       const newIdx = delta === -Infinity
         ? 0
-        : Math.max(0, Math.min(tasks.length - 1, idx + delta));
+        : Math.max(0, Math.min(realList.length - 1, idx + delta));
       if (newIdx === idx) return;
-      const [moved] = tasks.splice(idx, 1);
-      tasks.splice(newIdx, 0, moved);
+      const [moved] = realList.splice(idx, 1);
+      realList.splice(newIdx, 0, moved);
       saveTasks();
-      renderList(listEl, tasks);
-      renderTree();
-      animateClickBadge(listEl, newIdx);
+      // Rafraîchit la vue courante (liste principale, sous-tâches, ou recherche)
+      if (listEl === searchList) {
+        renderTree();
+        runSearch();
+      } else {
+        renderList(listEl, realList);
+        renderTree();
+        animateClickBadge(listEl, newIdx);
+      }
     });
     ctxMenu.appendChild(li);
   });
@@ -1183,7 +1194,8 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
 
   li.addEventListener('dragend', function() {
     document.body.classList.remove('dragging-active');
-    listEl.querySelectorAll('.task-item').forEach(el => el.classList.remove('dragging', 'drag-over'));
+    listEl.querySelectorAll('.task-item').forEach(el =>
+      el.classList.remove('dragging', 'drag-over', 'drop-before', 'drop-after'));
     clearTreeDropHighlight();
     dragSrcIndex     = null;
     dragListRef      = null;
@@ -1194,28 +1206,46 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   // et uniquement si la source est bien cette même liste (réordonnement)
   if (!searchResultMode) {
     li.addEventListener('dragover', function(e) {
-      // N'accepte le drop que si la source est cette liste (réordonnement intra-liste)
       if (dragListRef !== tasks) return;
       e.preventDefault();
-      // Pas de stopPropagation : l'événement doit pouvoir atteindre les tree-row
-      // de la sidebar quand le curseur s'y trouve (highlight du nœud cible)
-      listEl.querySelectorAll('.task-item').forEach(el => el.classList.remove('drag-over'));
-      this.classList.add('drag-over');
+      // Détermine si la souris est dans la moitié haute ou basse du li
+      const rect   = this.getBoundingClientRect();
+      const isTop  = e.clientY < rect.top + rect.height / 2;
+      // Nettoie tous les indicateurs de la liste
+      listEl.querySelectorAll('.task-item').forEach(el => {
+        el.classList.remove('drop-before', 'drop-after');
+      });
+      this.classList.add(isTop ? 'drop-before' : 'drop-after');
+    });
+
+    li.addEventListener('dragleave', function(e) {
+      if (!this.contains(e.relatedTarget)) {
+        this.classList.remove('drop-before', 'drop-after');
+      }
     });
 
     li.addEventListener('drop', function(e) {
-      if (dragListRef !== tasks) return; // drop venant d'ailleurs → on laisse passer
+      if (dragListRef !== tasks) return;
       e.preventDefault();
       e.stopPropagation();
-      const destId  = parseInt(this.dataset.taskId);
-      const srcId   = dragSrcIndex; // contient l'id de la tâche source
+      // Lit si on insère avant ou après ce li
+      const insertBefore = this.classList.contains('drop-before');
+      this.classList.remove('drop-before', 'drop-after');
+
+      const destId = parseInt(this.dataset.taskId);
+      const srcId  = dragSrcIndex;
       if (!srcId || srcId === destId) return;
-      // Retrouve les positions réelles dans le tableau au moment du drop
+
       const srcIdx  = tasks.findIndex(t => t.id === srcId);
-      const destIdx = tasks.findIndex(t => t.id === destId);
+      let   destIdx = tasks.findIndex(t => t.id === destId);
       if (srcIdx === -1 || destIdx === -1) return;
+
       const [moved] = tasks.splice(srcIdx, 1);
-      tasks.splice(destIdx, 0, moved);
+      // Recalcule destIdx après le splice (le tableau a bougé d'un cran)
+      destIdx = tasks.findIndex(t => t.id === destId);
+      const insertIdx = insertBefore ? destIdx : destIdx + 1;
+      tasks.splice(insertIdx, 0, moved);
+
       dragSrcIndex = null;
       dragListRef  = null;
       saveTasks();
@@ -1331,7 +1361,10 @@ function performTreeDrop(src, targetList, targetTaskId) {
     showList();
   } else {
     renderTree();
-    if (navigationStack.length === 1) {
+    // Si on était en mode recherche, relance la recherche pour refléter le déplacement
+    if (!searchView.classList.contains('hidden')) {
+      runSearch();
+    } else if (navigationStack.length === 1) {
       renderList(taskListEl, rootTasks);
     } else {
       const currentEntry = navigationStack[navigationStack.length - 1];
