@@ -180,6 +180,45 @@ quill.on('text-change', () => {
   }, 300);
 });
 
+/**
+ * Retourne true si l'éditeur Quill a actuellement le focus.
+ * Utilisé pour protéger le focus du clavier sur mobile.
+ */
+function quillHasFocus() {
+  return quill.hasFocus();
+}
+
+/**
+ * Sur mobile, tout `pointerdown` en dehors de l'éditeur Quill
+ * déclenche un blur involontaire (le navigateur transfère le focus).
+ * On intercepte ces événements au niveau du document et on appelle
+ * preventDefault() pour empêcher le transfert de focus, SAUF si
+ * la cible est un élément interactif légitime (input, button, select,
+ * lien, ou l'éditeur lui-même).
+ */
+document.addEventListener('pointerdown', (e) => {
+  if (!quillHasFocus()) return;
+  const target = e.target;
+  if (target.closest('.ql-editor, .ql-toolbar')) return;
+  if (target.closest('input, textarea, select, button, a, [contenteditable]')) return;
+  e.preventDefault();
+}, { passive: false });
+
+/**
+ * La toolbar Quill utilise `mousedown` pour ses boutons de formatage,
+ * ce qui provoque un blur sur l'éditeur avant d'appliquer le format.
+ * On annule ce comportement via preventDefault sur mousedown/touchstart
+ * de la toolbar, ce qui permet à Quill de garder le focus et d'appliquer
+ * correctement le formatage sur la sélection courante.
+ */
+document.addEventListener('DOMContentLoaded', () => {
+  const toolbar = document.querySelector('.ql-toolbar');
+  if (toolbar) {
+    toolbar.addEventListener('mousedown',  (e) => e.preventDefault(), { passive: false });
+    toolbar.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════
    SIDEBAR — Affichage / repli / redimensionnement
 ════════════════════════════════════════════════════════════ */
@@ -477,6 +516,14 @@ function showDetail(task) {
  */
 function setupDetailDrag() {
   detailView.draggable = true;
+
+  // Sur mobile, désactiver le draggable quand Quill a le focus
+  // pour éviter que le touch déclenche un drag et vole le focus.
+  const qlEditor = detailView.querySelector('#quillEditor');
+  if (qlEditor) {
+    qlEditor.addEventListener('focusin',  () => { detailView.draggable = false; });
+    qlEditor.addEventListener('focusout', () => { detailView.draggable = true;  });
+  }
 
   detailView.addEventListener('dragstart', (e) => {
     // Ne pas interférer avec les éléments interactifs internes
