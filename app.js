@@ -252,11 +252,11 @@ let purgedIds = loadPurgedIds();
  */
 let navigationStack = [{ tasks: rootTasks, title: 'Tâches', taskId: null }];
 
-/**
- * Délai en ms d'attente après le dernier clic avant d'appliquer
- * le déplacement de priorité (permet d'accumuler plusieurs clics).
- */
+/** Délai en ms d'attente après le dernier clic avant d'appliquer le déplacement de priorité. */
 const CLICK_DELAY = 400;
+
+/** État de l'accumulation des clics pour la remontée des tâches. */
+let clickAccum = { taskId: null, count: 0, timer: null, getList: null, listEl: null };
 
 /** État de repli/déploiement du panneau latéral, persisté dans localStorage. */
 let sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
@@ -1006,11 +1006,10 @@ function showContextMenu(e, task, tasks, listEl) {
       if (listEl === searchList) {
         renderTree();
         runSearch();
-      } else {
-        renderList(listEl, realList);
-        renderTree();
-        animateClickBadge(listEl, newIdx);
-      }
+       } else {
+         renderList(listEl, realList);
+         renderTree();
+       }
     });
     ctxMenu.appendChild(li);
   });
@@ -1085,14 +1084,6 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   textSpan.textContent = task.text;
   textWrap.appendChild(textSpan);
 
-  // Nombre de sous-tâches entre parenthèses
-  if (task.children.length > 0) {
-    const sub = document.createElement('span');
-    sub.className = 'task-subtask-count';
-    sub.textContent = ` (${task.children.length})`;
-    textWrap.appendChild(sub);
-  }
-
   // En mode recherche : affiche le chemin d'appartenance (ex: "Projet › Sprint")
   if (searchResultMode && task._path) {
     const pathSpan = document.createElement('span');
@@ -1108,12 +1099,17 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   noteIcon.title = 'Voir le détail / notes';
   noteIcon.textContent = '📋';
 
-  // ── Badge de clics (compteur de priorité) ─────────────
-  const clicks = document.createElement('span');
-  clicks.className = 'task-clicks';
-  clicks.title = 'Cliquer pour remonter la tâche';
-  clicks.textContent = task.clicks;
-  clicks.draggable = false;
+  // ── Badge nombre de sous-tâches ───────────────────────
+  const subBadge = document.createElement('span');
+  subBadge.className = 'task-clicks';
+  subBadge.draggable = false;
+  if (task.children.length > 0) {
+    subBadge.textContent = task.children.length;
+    subBadge.title = `${task.children.length} sous-tâche${task.children.length > 1 ? 's' : ''}`;
+  } else {
+    subBadge.textContent = '';
+    subBadge.style.visibility = 'hidden';
+  }
 
   // ── Bouton supprimer ──────────────────────────────────
   const del = document.createElement('button');
@@ -1124,10 +1120,10 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   li.appendChild(rank);
   li.appendChild(textWrap);
   li.appendChild(noteIcon);
-  li.appendChild(clicks);
+  li.appendChild(subBadge);
   li.appendChild(del);
 
-  // ── Gestion du clic de priorité ───────────────────────
+  // ── Gestion du clic de priorité (invisible, remonte la tâche) ───────────────
   // On utilise pointerdown/pointermove/pointerup plutôt que "click"
   // car sur un élément draggable, l'événement "click" peut être annulé
   // par le navigateur si le pointeur a légèrement bougé (détection de drag).
@@ -1139,14 +1135,6 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   textWrap.addEventListener('pointermove', () => { pointerMoved = true; });
   textWrap.addEventListener('pointerup', (e) => {
     if (!pointerMoved && e.button === 0) handleClick(task.id, getList, listEl);
-  });
-
-  let clickPointerMoved = false;
-  clicks.addEventListener('pointerdown', (e) => { e.stopPropagation(); clickPointerMoved = false; });
-  clicks.addEventListener('pointermove', () => { clickPointerMoved = true; });
-  clicks.addEventListener('pointerup', (e) => {
-    e.stopPropagation();
-    if (!clickPointerMoved && e.button === 0) handleClick(task.id, getList, listEl);
   });
 
   // Menu contextuel (clic droit) — désactivé en mode recherche
@@ -1565,7 +1553,6 @@ backBtn.addEventListener('click', () => {
  */
 deleteTaskBtn.addEventListener('click', () => {
   if (clickAccum.timer) { clearTimeout(clickAccum.timer); doFlush(); }
-
   const currentEntry = navigationStack[navigationStack.length - 1];
   const taskId = currentEntry.taskId;
   if (!taskId) return;
@@ -1599,17 +1586,6 @@ deleteTaskBtn.addEventListener('click', () => {
   }
 });
 
-/* ═══════════════════════════════════════════════════════════
-   CLICK PRIORITISATION — Accumulation de clics avec rémanence
-   Principe :
-     1. Chaque clic incrémente le compteur de la tâche (badge live)
-     2. On attend CLICK_DELAY ms après le dernier clic
-     3. Au flush : on remonte la tâche du nombre de clics accumulés
-   La variable clickAccum garde l'état de l'accumulation en cours.
-════════════════════════════════════════════════════════════ */
-
-let clickAccum = { taskId: null, count: 0, timer: null, getList: null, listEl: null };
-
 /**
  * Appelé à chaque clic sur une tâche.
  * Accumule les clics successifs sur la même tâche, flush si on change de tâche.
@@ -1620,31 +1596,24 @@ let clickAccum = { taskId: null, count: 0, timer: null, getList: null, listEl: n
  */
 function handleClick(taskId, getList, listEl) {
   if (clickAccum.taskId !== taskId) {
-    // On clique sur une tâche différente : flush l'accumulation précédente
     if (clickAccum.timer) { clearTimeout(clickAccum.timer); doFlush(); }
     clickAccum = { taskId, count: 0, timer: null, getList, listEl };
   }
   clickAccum.count += 1;
 
-  // Mise à jour immédiate du badge (retour visuel instantané)
   const tasks   = getList();
   const liveIdx = tasks.findIndex(t => t.id === taskId);
   if (liveIdx !== -1) {
     tasks[liveIdx].clicks += 1;
     saveTasks();
-    refreshClickBadge(listEl, liveIdx, tasks[liveIdx].clicks);
   }
 
-  // (Re)démarre le timer : le déplacement n'aura lieu que si aucun clic
-  // supplémentaire ne survient dans les CLICK_DELAY ms suivants
   clearTimeout(clickAccum.timer);
   clickAccum.timer = setTimeout(doFlush, CLICK_DELAY);
 }
 
 /**
  * Applique le déplacement accumulé : remonte la tâche de `count` positions.
- * Appelé automatiquement après CLICK_DELAY ms, ou manuellement avant
- * une navigation (pour ne pas laisser de déplacement en suspens).
  */
 function doFlush() {
   if (!clickAccum.taskId || clickAccum.count === 0) {
@@ -1654,42 +1623,18 @@ function doFlush() {
   const { taskId, count, getList, listEl } = clickAccum;
   clickAccum = { taskId: null, count: 0, timer: null, getList: null, listEl: null };
 
-  const tasks = getList(); // tableau live au moment du flush
+  const tasks = getList();
   const cur   = tasks.findIndex(t => t.id === taskId);
 
   if (cur > 0) {
-    // Déplace la tâche vers le haut de count positions (minimum position 0)
     const newIdx = Math.max(0, cur - count);
     const [moved] = tasks.splice(cur, 1);
     tasks.splice(newIdx, 0, moved);
     saveTasks();
     renderList(listEl, tasks);
-    animateClickBadge(listEl, newIdx);
     renderTree();
   } else {
-    // Déjà en tête : re-render quand même pour synchroniser l'affichage
     renderList(listEl, tasks);
-  }
-}
-
-/** Met à jour le texte et l'animation du badge de clics pour un item donné. */
-function refreshClickBadge(listEl, index, value) {
-  const badges = listEl.querySelectorAll('.task-clicks');
-  if (badges[index]) {
-    badges[index].textContent = value;
-    badges[index].classList.remove('pulse');
-    void badges[index].offsetWidth; // force le reflow pour relancer l'animation CSS
-    badges[index].classList.add('pulse');
-  }
-}
-
-/** Déclenche uniquement l'animation pulse sur le badge (après un flush). */
-function animateClickBadge(listEl, index) {
-  const badges = listEl.querySelectorAll('.task-clicks');
-  if (badges[index]) {
-    badges[index].classList.remove('pulse');
-    void badges[index].offsetWidth;
-    badges[index].classList.add('pulse');
   }
 }
 
