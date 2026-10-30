@@ -1100,6 +1100,11 @@ h2:hover { color: var(--accent); }
   #searchOptions { flex-wrap: nowrap; }
 }
 
+@media (max-width: 640px) {
+  #syncLabel { display: none; }
+  .sync-status { padding: 4px 6px; border-radius: 50%; min-width: 32px; justify-content: center; }
+}
+
 @media (max-width: 400px) {
   .app-title { display: none; }
 }
