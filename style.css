@@ -463,13 +463,14 @@ h2:hover { color: var(--accent); }
 .task-item {
   display: flex;
   align-items: center;
-  background: #f8f9ff;
-  border: 2px solid #e8e9f5;
-  border-radius: 8px;
-  padding: 8px 4px 8px 13px;
+  background: #fafbff;
+  border: 1px solid #ededf0;
+  border-radius: 4px;
+  padding: 4px 3px 4px 10px;
   cursor: grab;
   user-select: none;
   transition: border-color 0.15s, background 0.15s;
+  gap: 4px;
 }
 .task-item:active { cursor: grabbing; }
 .task-item.dragging { opacity: 0.4; border-color: var(--accent); }
@@ -496,16 +497,16 @@ h2:hover { color: var(--accent); }
 .task-item.drop-after::after  { bottom: -3px; }
 
 .task-rank {
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   font-weight: 700;
-  color: var(--muted);
-  min-width: 22px;
-  margin-right: 8px;
+  color: #aaa;
+  min-width: 18px;
+  flex-shrink: 0;
 }
 
 .task-text {
   flex: 1;
-  font-size: 0.95rem;
+  font-size: 0.87rem;
   color: var(--text);
   cursor: pointer;
 }
@@ -524,17 +525,17 @@ h2:hover { color: var(--accent); }
 }
 
 .task-clicks {
-  font-size: 0.73rem;
+  font-size: 0.6rem;
   color: #fff;
   background: var(--accent);
-  border-radius: 20px;
-  padding: 2px 8px;
-  margin-left: 8px;
-  min-width: 26px;
+  border-radius: 10px;
+  padding: 1px 5px;
+  min-width: 20px;
   text-align: center;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
+  flex-shrink: 0;
 }
 .task-clicks:hover { background: var(--accent-dark); }
 .task-clicks.pulse { animation: pulse 0.25s ease; }
@@ -548,20 +549,20 @@ h2:hover { color: var(--accent); }
 .task-detail-btn {
   background: none;
   border: none;
-  font-size: 1.3rem;
+  font-size: 1rem;
   cursor: pointer;
-  margin-left: 6px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  opacity: 0.4;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0.3;
   transition: opacity 0.15s, background 0.15s;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 44px;
-  min-height: 44px;
+  min-width: 28px;
+  min-height: 28px;
   flex-shrink: 0;
+  margin-left: 2px;
 }
 .task-detail-btn:hover { opacity: 1; background: var(--accent-light); }
 .task-detail-btn:active { background: #ddd6fe; }
@@ -571,18 +572,18 @@ h2:hover { color: var(--accent); }
   background: none;
   border: none;
   color: #d1d5db;
-  font-size: 1rem;
+  font-size: 0.8rem;
   cursor: pointer;
-  margin-left: 3px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  padding: 3px 4px;
+  border-radius: 4px;
   transition: color 0.15s, background 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 36px;
-  min-height: 36px;
+  min-width: 28px;
+  min-height: 28px;
   flex-shrink: 0;
+  margin-left: 2px;
 }
 .task-delete:hover { color: #ef4444; background: #fee2e2; }
 .task-delete:active { background: #fecaca; }
