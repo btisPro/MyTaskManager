@@ -36,9 +36,21 @@ function migrateTask(t, i) {
 /**
  * Sérialise rootTasks dans localStorage, puis déclenche
  * une sync automatique vers le Gist si la sync est activée.
+ *
+ * Important : on appelle ensureTimestamps() avant d'écrire, ce qui
+ * garantit que chaque tâche possède un champ `updatedAt` valide.
+ * Sans ça, le merge last-write-wins du côté distant serait aveugle :
+ * deux appareils auraient des `updatedAt` identiques et le merge
+ * choisirait arbitrairement l'un des deux en ignorant l'autre.
  */
 function saveTasks() {
-  localStorage.setItem('tasks', JSON.stringify(rootTasks));
+  // ensureTimestamps ne remplace PAS un updatedAt existant (il ajoute seulement
+  // si absent). Les tâches réellement modifiées ont déjà leur updatedAt frais
+  // posé par makeTask() ou touchUpdatedAt() au moment de la mutation.
+  const stamped = (typeof ensureTimestamps === 'function')
+    ? ensureTimestamps(rootTasks)
+    : rootTasks;
+  localStorage.setItem('tasks', JSON.stringify(stamped));
   if (typeof syncAuto === 'function') {
     syncAuto(onSyncUpdate);
   }
@@ -355,12 +367,20 @@ let currentNoteTaskId = null;
  * on met à jour task.notes avec le HTML de l'éditeur et on persiste.
  */
 quill.on('text-change', () => {
-  clearTimeout(quillSaveTimer);
-  quillSaveTimer = setTimeout(() => {
-    const task = findTaskById(rootTasks, currentNoteTaskId);
-    if (task) { task.notes = quill.getSemanticHTML(); saveTasks(); }
-  }, 300);
-});
+   clearTimeout(quillSaveTimer);
+   quillSaveTimer = setTimeout(() => {
+     const task = findTaskById(rootTasks, currentNoteTaskId);
+     if (task) {
+       task.notes = quill.getSemanticHTML();
+       // touchUpdatedAt() marque la tâche comme modifiée et met à jour son updatedAt
+       // au timestamp courant. Cela garantit que lors de la sync, la version locale
+       // (qui possède les notes fraîchement saisies) l'emportera sur les versions
+       // distantes plus anciennes, même si elles ont le même id.
+       touchUpdatedAt(task.id);
+       saveTasks();
+     }
+   }, 300);
+ });
 
 /**
  * Retourne true si l'éditeur Quill a actuellement le focus.
@@ -1001,6 +1021,10 @@ function showContextMenu(e, task, tasks, listEl) {
       if (newIdx === idx) return;
       const [moved] = realList.splice(idx, 1);
       realList.splice(newIdx, 0, moved);
+      // La tâche a changé de position : touchUpdatedAt() met à jour son updatedAt
+      // pour signaler à la sync que ce réordonnement local doit être préservé
+      // (la position relative dans la liste est un élément d'état de la tâche).
+      touchUpdatedAt(moved.id);
       saveTasks();
       // Rafraîchit la vue courante (liste principale, sous-tâches, ou recherche)
       if (listEl === searchList) {
@@ -1243,19 +1267,28 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
 
       if (isChild) {
         // ── Drop centre : la tâche source devient sous-tâche de la cible ──
-        // Vérifie que la cible n'est pas descendante de la source (cycle interdit)
+        // Le changement hiérarchique (passage du niveau parent au niveau enfant)
+        // est un changement d'état : on marque DEUX tâches :
+        //   1. La tâche déplacée : elle a changé de liste parente
+        //   2. La tâche cible : elle a gagné une sous-tâche, donc son contenu structurel change
         if (isDescendantOrSelf(destId, srcId, rootTasks)) return;
         const [moved] = tasks.splice(srcIdx, 1);
         destTask.children.unshift(moved);
-        // Ouvre le nœud cible dans l'arbre pour que la sous-tâche soit visible
         treeCollapsed[destId] = false;
         localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
+        touchUpdatedAt(moved.id);      // Marque la tâche qui a changé de parent
+        touchUpdatedAt(destTask.id);   // Marque le parent qui a gagné un enfant
       } else {
         // ── Drop haut/bas : réordonnement dans la même liste ──
+        // La position relative a changé (avant/après une autre tâche).
+        // On marque uniquement la tâche déplacée pour signaler que son ordre
+        // s'est modifié — les autres tâches ne changent pas d'état, seulement
+        // leur position relative (qui est implicite dans l'ordre du tableau).
         const [moved] = tasks.splice(srcIdx, 1);
-        destIdx = tasks.findIndex(t => t.id === destId); // recalcule après splice
+        destIdx = tasks.findIndex(t => t.id === destId);
         const insertIdx = isBefore ? destIdx : destIdx + 1;
         tasks.splice(insertIdx, 0, moved);
+        touchUpdatedAt(moved.id);      // Marque le réordonnement local
       }
 
       dragSrcIndex = null;
@@ -1335,6 +1368,11 @@ function performTreeDrop(src, targetList, targetTaskId) {
   if (idx === -1) return;
   src.srcList.splice(idx, 1);
   targetList.unshift(src.srcTask);
+  // La tâche a changé de parent (depuis un nœud de l'arbre vers un autre).
+  // touchUpdatedAt() met à jour son updatedAt, ce qui signale à la sync que
+  // ce mouvement hiérarchique doit être préservé. Les ancêtres (le nouveau parent
+  // et potentiellement ses propres ancêtres) reçoivent aussi une marque de modification.
+  touchUpdatedAt(src.srcTask.id);
 
   if (targetTaskId) {
     treeCollapsed[targetTaskId] = false;
@@ -1514,10 +1552,14 @@ function startEditTitle(task) {
   input.focus();
   input.select();
 
-  function commit() {
-    const newText = input.value.trim() || currentText;
-    task.text = newText;
-    // Met à jour l'entrée correspondante dans la pile de navigation
+   function commit() {
+     const newText = input.value.trim() || currentText;
+     task.text = newText;
+     // Le titre a changé : touchUpdatedAt() marque la tâche ET tous ses ancêtres
+     // dans l'arbre comme modifiés. Cela garantit que la sync verra cette tâche
+     // (et potentiellement sa structure hiérarchique) comme fraîchement éditée.
+     touchUpdatedAt(task.id);
+     // Met à jour l'entrée correspondante dans la pile de navigation
     const entry = navigationStack[navigationStack.length - 1];
     entry.title = newText;
     saveTasks();
@@ -1654,6 +1696,10 @@ function doFlush() {
     const newIdx = Math.max(0, cur - count);
     const [moved] = tasks.splice(cur, 1);
     tasks.splice(newIdx, 0, moved);
+    // Après accumulation de clics, la tâche a remontée dans la priorité (ordre).
+    // touchUpdatedAt() marque ce changement de position pour que la sync sache
+    // que cet ordre prioritaire doit prévaloir sur les données distantes.
+    touchUpdatedAt(moved.id);
     saveTasks();
     renderList(listEl, tasks);
     renderTree();
@@ -1671,7 +1717,10 @@ function doFlush() {
  * @param {string} text - Titre de la tâche
  */
 function makeTask(text) {
-  return { id: Date.now(), text: text.trim(), clicks: 0, notes: '', children: [] };
+  const now = Date.now();
+  // updatedAt posé dès la création : le merge distant saura que cette tâche
+  // est plus récente que toute version antérieure sans timestamp.
+  return { id: now, text: text.trim(), clicks: 0, notes: '', children: [], updatedAt: now };
 }
 
 // Ajout d'une tâche racine via le bouton ou la touche Entrée
@@ -1936,6 +1985,27 @@ function initTrashUI() {
 /* ═══════════════════════════════════════════════════════════
    UTILS — Fonctions utilitaires
 ════════════════════════════════════════════════════════════ */
+
+/**
+ * Met à jour le champ `updatedAt` d'une tâche et de tous ses ancêtres
+ * dans l'arbre rootTasks, afin que le merge last-write-wins soit correct.
+ *
+ * À appeler après toute mutation d'une tâche (titre, notes, déplacement…)
+ * avant saveTasks().
+ *
+ * @param {number} taskId - Id de la tâche modifiée
+ */
+function touchUpdatedAt(taskId) {
+  const now = Date.now();
+  function touch(list) {
+    for (const t of list) {
+      if (t.id === taskId) { t.updatedAt = now; return true; }
+      if (touch(t.children)) { t.updatedAt = now; return true; }
+    }
+    return false;
+  }
+  touch(rootTasks);
+}
 
 /**
  * Recherche récursive d'une tâche par id dans un arbre.
@@ -2209,23 +2279,32 @@ function initTouchDrag(containerEl, getTasksFn) {
         const isBefore = targetLi.classList.contains('drop-before');
 
         if (isChild) {
-          // ── Drop centre : sous-tâche ──
+          // ── Drop centre : sous-tâche (drag tactile) ──
+          // La tâche devient enfant de la cible : même logique que le drag souris.
           if (!isDescendantOrSelf(destId, srcId, rootTasks)) {
             const destTask = tasks[destIdx];
             const [moved]  = tasks.splice(srcIdx, 1);
             destTask.children.unshift(moved);
             treeCollapsed[destId] = false;
             localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
+            // Marque la tâche déplacée et sa nouvelle parente pour que la sync
+            // intègre ce changement hiérarchique depuis le tactile de la même façon
+            // que depuis la souris.
+            touchUpdatedAt(moved.id);
+            touchUpdatedAt(destTask.id);
             saveTasks();
             renderList(containerEl, tasks);
             renderTree();
           }
         } else {
-          // ── Drop haut/bas : réordonnement ──
+          // ── Drop haut/bas : réordonnement (drag tactile) ──
+          // La position relative change : même logique que le drag souris.
           const [moved] = tasks.splice(srcIdx, 1);
           destIdx = tasks.findIndex(t => t.id === destId);
           const insertIdx = isBefore ? destIdx : destIdx + 1;
           tasks.splice(insertIdx, 0, moved);
+          // Marque le réordonnement tactile pour que la sync le préserve.
+          touchUpdatedAt(moved.id);
           saveTasks();
           renderList(containerEl, tasks);
           renderTree();
