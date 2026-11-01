@@ -136,12 +136,14 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 9.1b.1 | Long press (500 ms) | Maintenir le doigt sur une tâche 500 ms → affiche le menu contextuel touch-friendly sous le doigt | `app.js › initTouchDrag › longPressTimer` |
-| 9.1b.2 | Glisser pendant le menu | Si le doigt se déplace hors du menu pendant/après l'affichage → annule le menu et démarre un drag tactile | `app.js › initTouchDrag › touchmove` |
-| 9.1b.3 | Ghost visuel tactile | Une copie semi-transparente de la tâche suit le doigt pendant le drag tactile | `app.js › initTouchDrag › touchDragGhost` |
-| 9.1b.4 | Indicateur de position | Même logique que souris : tiers haut/bas = ligne d'insertion, tiers central = mise en sous-tâche (`drop-child`) | `app.js › initTouchDrag › touchmove` |
-| 9.1b.5 | Drop au relâchement | `touchend` identifie la tâche cible sous le doigt et applique le déplacement (réordonnement ou sous-tâche) | `app.js › initTouchDrag › touchend` |
-| 9.1b.6 | Annulation | Si le doigt revient sur la tâche source ou sort de la liste → annulation propre | `app.js › initTouchDrag › touchend` |
+| 9.1b.1 | Long press (500 ms) | Maintenir le doigt **immobile** sur une tâche 500 ms → affiche le menu contextuel touch-friendly sous le doigt | `app.js › initTouchDrag › longPressTimer` |
+| 9.1b.2 | Délai drag (200 ms) | Le drag ne peut démarrer qu'après 200 ms d'appui immobile. Avant ce délai, tout mouvement = scroll normal. Cela évite de déclencher le drag accidentellement en scrollant. | `app.js › initTouchDrag › dragReadyTimer / dragReady` |
+| 9.1b.3 | Glisser après délai | Après 200 ms d'appui, bouger le doigt > seuil → annule le long press et démarre le drag tactile | `app.js › initTouchDrag › touchmove` |
+| 9.1b.4 | Glisser hors du menu | Si le doigt sort du menu après long press → ferme le menu et démarre le drag | `app.js › initTouchDrag › touchmove` |
+| 9.1b.5 | Ghost visuel tactile | Une copie semi-transparente de la tâche suit le doigt pendant le drag tactile | `app.js › initTouchDrag › createTouchGhost` |
+| 9.1b.6 | Indicateur de position | Même logique que souris : tiers haut/bas = ligne d'insertion, tiers central = mise en sous-tâche (`drop-child`) | `app.js › initTouchDrag › touchmove` |
+| 9.1b.7 | Drop au relâchement | `touchend` identifie la tâche cible sous le doigt et applique le déplacement (réordonnement ou sous-tâche) | `app.js › initTouchDrag › touchend` |
+| 9.1b.8 | Annulation propre | `touchcancel` (appel entrant, etc.) nettoie ghost et indicateurs sans appliquer de déplacement | `app.js › initTouchDrag › touchcancel` |
 
 ### 9.2 Drag vers l'arbre (déplacement entre niveaux)
 
@@ -311,6 +313,7 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `collectAllIds([e.task], deletedIds)` dans `syncBidirectional` | Inclut les descendants des tâches en corbeille dans les ids supprimés |
 | `localAllIds` dans `mergeTasks` | Sans ça, un déplacement local est interprété comme une nouvelle tâche distante |
 | `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |
-| Long press : `clearTimeout` sur `touchmove` > seuil | Si le doigt bouge avant 500 ms, annuler le timer pour ne pas déclencher le menu |
-| Touch drag : `e.preventDefault()` dans `touchmove` | Empêche le scroll de la page pendant le drag tactile |
+| `dragReadyTimer` (200 ms) avant tout drag | Si le doigt bouge avant 200 ms → scroll normal, les deux timers sont annulés, `touchSrcTask = null` |
+| Long press : `clearTimeout` sur `touchmove` > seuil | Si le doigt bouge après 200 ms mais avant 500 ms → annule le long press, démarre le drag |
+| Touch drag : `e.preventDefault()` dans `touchmove` seulement si `isDragging` | Avant que le drag soit actif, ne pas bloquer le scroll natif |
 | Drop-center (sous-tâche) : vérifier `isDescendantOrSelf` | Interdire de dropper une tâche sur l'un de ses propres descendants |

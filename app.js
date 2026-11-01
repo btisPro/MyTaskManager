@@ -1976,16 +1976,19 @@ function findTaskById(list, id) {
  * @param {Function}    getTasksFn  - Fonction retournant le tableau de tâches courant
  */
 function initTouchDrag(containerEl, getTasksFn) {
-  const LONG_PRESS_DELAY = 500;  // ms avant de déclencher le menu ou le drag
-  const MOVE_THRESHOLD   = 8;    // px : mouvement en-dessous duquel on reste en "long press"
+  const LONG_PRESS_DELAY = 500;  // ms immobile → ouvre le menu contextuel
+  const DRAG_READY_DELAY = 200;  // ms immobile minimum avant qu'un mouvement puisse démarrer le drag
+  const MOVE_THRESHOLD   = 10;   // px de mouvement minimum pour démarrer le drag (une fois DRAG_READY_DELAY écoulé)
 
-  let longPressTimer = null;     // timer du long press
-  let touchSrcTask   = null;     // tâche source du drag tactile
-  let touchSrcList   = null;     // tableau source
-  let touchGhost     = null;     // élément DOM ghost qui suit le doigt
-  let isDragging     = false;    // true une fois le drag tactile démarré
+  let longPressTimer  = null;    // timer du long press (500 ms)
+  let dragReadyTimer  = null;    // timer du délai minimum avant drag (200 ms)
+  let dragReady       = false;   // true après DRAG_READY_DELAY ms d'appui immobile
+  let touchSrcTask    = null;    // tâche source du drag tactile
+  let touchSrcList    = null;    // tableau source
+  let touchGhost      = null;    // élément DOM ghost qui suit le doigt
+  let isDragging      = false;   // true une fois le drag tactile démarré
   let startX = 0, startY = 0;   // position du touchstart
-  let menuShown      = false;    // true si le menu contextuel est affiché
+  let menuShown       = false;   // true si le menu contextuel est affiché
 
   // ── Helpers internes ──────────────────────────────────────
 
@@ -2036,7 +2039,10 @@ function initTouchDrag(containerEl, getTasksFn) {
       el.classList.remove('drop-before', 'drop-after', 'drop-child', 'touch-src'));
     document.body.classList.remove('dragging-active');
     clearTimeout(longPressTimer);
+    clearTimeout(dragReadyTimer);
     longPressTimer = null;
+    dragReadyTimer = null;
+    dragReady      = false;
     touchSrcTask   = null;
     touchSrcList   = null;
     isDragging     = false;
@@ -2065,7 +2071,13 @@ function initTouchDrag(containerEl, getTasksFn) {
 
     if (!touchSrcTask) return;
 
-    // Démarre le timer du long press
+    // Timer 1 : après DRAG_READY_DELAY ms immobile, le drag devient autorisé
+    dragReadyTimer = setTimeout(() => {
+      dragReadyTimer = null;
+      dragReady = true;
+    }, DRAG_READY_DELAY);
+
+    // Timer 2 : après LONG_PRESS_DELAY ms immobile, affiche le menu contextuel
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
       if (isDragging) return; // drag déjà en cours, ne pas montrer le menu
@@ -2115,9 +2127,21 @@ function initTouchDrag(containerEl, getTasksFn) {
     }
 
     if (!isDragging) {
-      if (dist < MOVE_THRESHOLD) return; // pas encore assez bougé pour démarrer le drag
+      // Le drag n'est autorisé qu'après DRAG_READY_DELAY ms d'appui immobile.
+      // Avant ce délai, tout mouvement est interprété comme un scroll normal.
+      if (!dragReady) {
+        // Annule les deux timers : l'utilisateur scrolle
+        clearTimeout(longPressTimer);
+        clearTimeout(dragReadyTimer);
+        longPressTimer = null;
+        dragReadyTimer = null;
+        touchSrcTask   = null;
+        return; // laisse le scroll natif se produire
+      }
 
-      // Annule le long press si on a bougé avant 500 ms
+      if (dist < MOVE_THRESHOLD) return; // pas assez bougé pour démarrer le drag
+
+      // Annule le long press (le doigt a bougé avant 500 ms)
       clearTimeout(longPressTimer);
       longPressTimer = null;
 
@@ -2161,6 +2185,8 @@ function initTouchDrag(containerEl, getTasksFn) {
   // ── touchend ──────────────────────────────────────────────
   containerEl.addEventListener('touchend', (e) => {
     clearTimeout(longPressTimer);
+    clearTimeout(dragReadyTimer);
+    dragReadyTimer = null;
 
     if (!isDragging) {
       // Pas de drag → le touchend est un simple tap ou la fin du long press (menu déjà affiché)
