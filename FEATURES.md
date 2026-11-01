@@ -134,17 +134,27 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 ### 9.1b Drag tactile (mobile) — Touch events
 
+Trois comportements selon le timing d'appui :
+
+| Timing | Comportement |
+|---|---|
+| Mouvement < 200 ms | Scroll natif — les timers sont annulés |
+| Appui 200–500 ms puis mouvement > 10 px | Drag tactile (annule le long press) |
+| Appui ≥ 500 ms immobile | Menu contextuel affiché |
+| → Doigt bouge ensuite (sans lâcher) | Menu fermé + drag démarré immédiatement |
+| → Doigt levé après menu | Menu reste visible, fin de cycle |
+
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 9.1b.1 | Délai scroll (200 ms) | Le drag ne peut démarrer qu'après 200 ms d'appui immobile. Avant ce délai, tout mouvement = scroll normal. Évite les drags accidentels au scroll. | `app.js › initTouchDrag › dragReadyTimer / dragReady` |
-| 9.1b.2 | Glisser après délai | Après 200 ms d'appui immobile, bouger le doigt > 10 px → annule le long press et démarre le drag tactile | `app.js › initTouchDrag › touchmove` |
-| 9.1b.3 | Long press (500 ms) | Maintenir le doigt **immobile** ≥ 500 ms → affiche le menu contextuel touch-friendly. Le geste est alors **terminé** : lever le doigt et reposer pour draguer. | `app.js › initTouchDrag › longPressTimer` |
-| 9.1b.4 | Gestes mutuellement exclusifs | Sur un même cycle touch, soit le menu, soit le drag — jamais les deux. Le flag `gestureDone` bloque le drag si le menu s'est déclenché. Pour draguer après le menu, l'utilisateur doit reposer le doigt (nouveau `touchstart`). | `app.js › initTouchDrag › gestureDone` |
-| 9.1b.5 | Ghost visuel tactile | Une copie semi-transparente de la tâche suit le doigt pendant le drag (centré horizontalement, décalé -20 px vertical) | `app.js › initTouchDrag › createTouchGhost` |
-| 9.1b.6 | Indicateur de position | Même logique que souris : tiers haut/bas = ligne d'insertion (`drop-before`/`drop-after`), tiers central = mise en sous-tâche (`drop-child`) | `app.js › initTouchDrag › touchmove` |
-| 9.1b.7 | Drop au relâchement | `touchend` identifie la tâche cible sous le doigt et applique le déplacement (réordonnement ou sous-tâche) | `app.js › initTouchDrag › touchend` |
-| 9.1b.8 | Annulation propre | `touchcancel` (appel entrant, etc.) nettoie ghost et indicateurs sans appliquer de déplacement | `app.js › initTouchDrag › touchcancel` |
-| 9.1b.9 | `touchstart` non-passif | Le listener `touchstart` est déclaré `{ passive: false }` pour autoriser `preventDefault()` dans `touchmove` pendant le drag (bloque le scroll natif) | `app.js › initTouchDrag` |
+| 9.1b.1 | Délai scroll (200 ms) | Le drag ne peut démarrer qu'après 200 ms d'appui immobile. Avant ce délai, tout mouvement = scroll normal. | `app.js › initTouchDrag › dragReadyTimer / dragReady` |
+| 9.1b.2 | Drag entre 200 ms et 500 ms | Après 200 ms, bouger le doigt > 10 px → annule le long press et démarre le drag | `app.js › initTouchDrag › touchmove` |
+| 9.1b.3 | Long press (500 ms) | Maintenir le doigt immobile ≥ 500 ms → affiche le menu contextuel touch-friendly + vibration 40 ms | `app.js › initTouchDrag › longPressTimer` |
+| 9.1b.4 | Drag depuis le menu (sans lâcher) | Si le menu est affiché (`menuShown = true`) et le doigt bouge > 10 px → `hideContextMenu()` + drag démarré immédiatement dans le même cycle touch | `app.js › initTouchDrag › touchmove` |
+| 9.1b.5 | Ghost visuel tactile | Clone du `<li>` source, semi-transparent, centré sous le doigt (-20 px vertical) | `app.js › initTouchDrag › createTouchGhost / startDrag` |
+| 9.1b.6 | Indicateur de position | Tiers haut/bas = ligne d'insertion (`drop-before`/`drop-after`), tiers central = sous-tâche (`drop-child`) | `app.js › initTouchDrag › touchmove` |
+| 9.1b.7 | Drop au relâchement | `touchend` identifie la tâche cible sous le doigt et applique le déplacement | `app.js › initTouchDrag › touchend` |
+| 9.1b.8 | Annulation propre | `touchcancel` (appel entrant, etc.) → nettoyage sans appliquer de déplacement | `app.js › initTouchDrag › touchcancel` |
+| 9.1b.9 | `touchstart` non-passif | Déclaré `{ passive: false }` pour autoriser `preventDefault()` dans `touchmove` | `app.js › initTouchDrag` |
 
 ### 9.2 Drag vers l'arbre (déplacement entre niveaux)
 
@@ -187,7 +197,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 10.4 | Vrai parent retrouvé | En mode recherche, `findParentList` retrouve le vrai tableau parent | `app.js › showContextMenu` |
 | 10.5 | Rafraîchissement adapté | Relance `runSearch()` si mode recherche, sinon `renderList` | `app.js › showContextMenu` |
 | 10.6 | Fermeture automatique | Sur clic/tap ailleurs, scroll, ou touche Échap | `app.js › document click / scroll / keydown` |
-| 10.7 | Drag après menu (mobile) | Après fermeture du menu long press, l'utilisateur doit lever le doigt et reposer pour draguer. Long press et drag sont mutuellement exclusifs sur un même cycle touch (`gestureDone`). | `app.js › initTouchDrag › gestureDone` |
+| 10.7 | Drag depuis le menu (mobile) | Si le doigt bouge après le long press (sans lâcher), le menu se ferme et le drag démarre immédiatement dans le même cycle touch (`menuShown → hideContextMenu → startDrag`) | `app.js › initTouchDrag › menuShown / startDrag` |
 
 ---
 
@@ -341,8 +351,9 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `result.trash` passé à `onSyncUpdate` au démarrage | Sans ça, la corbeille distante n'était pas chargée en mémoire au démarrage (mergedTrash ignoré) |
 | `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |
 | `dragReadyTimer` (200 ms) avant tout drag | Si le doigt bouge avant 200 ms → `cleanupTouch()` immédiat, scroll natif, pas de drag |
-| `gestureDone` flag dans `initTouchDrag` | Marque le cycle touch comme terminé quand le long press a déclenché le menu — empêche le touchmove/touchend d'interpréter le lâcher comme un drop |
-| Long press et drag **mutuellement exclusifs** sur un même cycle | Si le menu s'affiche (500 ms), `gestureDone = true` → le drag est impossible sur ce cycle. Pour draguer, l'utilisateur doit lever et reposer le doigt (nouveau `touchstart`). |
+| `menuShown` flag dans `initTouchDrag` | Indique que le menu est affiché dans ce cycle. Si le doigt bouge ensuite, `touchmove` ferme le menu et démarre le drag sans nouveau `touchstart`. |
+| `startDrag()` factorisée | Factorisée pour être appelée depuis deux endroits : mouvement normal (200–500 ms) et mouvement après menu. |
+| Recalibrage de `startX/startY` après fermeture du menu | Évite que la distance accumulée depuis le touchstart initial décale le ghost — on repart de la position courante du doigt. |
 | `touchstart` déclaré `{ passive: false }` | Obligatoire pour que `preventDefault()` dans `touchmove` soit respecté par le navigateur et bloque le scroll pendant le drag |
 | `e.preventDefault()` dans `touchmove` seulement si `isDragging` | Avant que le drag soit actif, ne pas bloquer le scroll natif |
 | Drop-center (sous-tâche) : vérifier `isDescendantOrSelf` | Interdire de dropper une tâche sur l'un de ses propres descendants |
