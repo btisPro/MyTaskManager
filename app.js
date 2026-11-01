@@ -2365,8 +2365,10 @@ if (typeof initSyncUI === 'function') {
   // Sync automatique au démarrage si la sync est activée et qu'on est en ligne
   const cfg = getSyncConfig();
   if (cfg.enabled && navigator.onLine) {
+    // On passe AUSSI result.trash à onSyncUpdate pour que la corbeille distante
+    // soit chargée en mémoire dès le démarrage (sinon mergedTrash était ignoré).
     syncBidirectional().then(result => {
-      if (result.ok && result.tasks) onSyncUpdate(result.tasks);
+      if (result.ok && result.tasks) onSyncUpdate(result.tasks, result.trash);
     });
   }
 }

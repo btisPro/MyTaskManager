@@ -13,7 +13,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 1.3 | Id unique | Basé sur `Date.now()` + index pour éviter les collisions | `app.js › makeTask` |
 | 1.4 | Arborescence infinie | `children[]` imbriqués sans limite de profondeur | Structure récursive |
 | 1.5 | Champ `clicks` | Toujours présent (migration), incrémenté au clic, mais non affiché | `app.js › handleClick` |
-| 1.6 | Champ `updatedAt` | Ajouté par `ensureTimestamps()` avant chaque sync, utilisé pour last-write-wins | `sync.js › ensureTimestamps` |
+| 1.6 | Champ `updatedAt` | Posé par `makeTask()` à la création et par `touchUpdatedAt()` à chaque mutation ; `ensureTimestamps()` ne l'ajoute que si absent (migration données anciennes) | `app.js › makeTask / touchUpdatedAt`, `sync.js › ensureTimestamps` |
 
 ---
 
@@ -239,31 +239,44 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 ## 14. Synchronisation GitHub Gist
 
+### 14a. Comportement nominal de la sync bidirectionnelle
+
+À chaque sync, les 4 opérations suivantes sont appliquées dans l'ordre :
+
+1. **Intégration des nouvelles tâches distantes** : toute tâche présente dans le Gist mais absente en local est ajoutée à l'arbre local.
+2. **Mise à jour last-write-wins** : pour chaque tâche présente des deux côtés, la version avec `updatedAt` le plus grand l'emporte (texte, notes, priorité).
+3. **Respect des déplacements hiérarchiques distants** : si une tâche a changé de niveau dans l'arbre côté distant ET que le distant est plus récent, la tâche est repositionnée localement à sa place distante.
+4. **Suppression des tâches distantes en corbeille** : si une tâche est dans la corbeille distante (supprimée sur l'autre appareil), elle est retirée de l'arbre local et ajoutée à la corbeille locale (restaurable si besoin).
+
+### 14b. Tableau des fonctionnalités
+
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14.1 | Configuration | Token PAT + Gist ID saisis dans la modale sync, persistés dans localStorage | `sync.js › getSyncConfig / setSyncConfig` |
-| 14.2 | Sync bidirectionnelle | GET Gist → merge → save local → push Gist. Le Gist est **toujours lu en premier** pour intégrer les modifications des autres appareils. | `sync.js › syncBidirectional` |
+| 14.2 | Sync bidirectionnelle | GET Gist → merge → save local → push Gist. Le Gist est **toujours lu en premier**. | `sync.js › syncBidirectional` |
 | 14.3 | Sync push forcée | Écrase le Gist avec les données locales (initialisation premier appareil) | `sync.js › syncPush` |
 | 14.4 | Sync pull forcée | Écrase le local avec les données Gist (initialisation nouvel appareil) | `sync.js › syncPull` |
 | 14.5 | Sync automatique | Déclenchée après chaque `saveTasks()` avec debounce 3 s | `sync.js › syncAuto` |
-| 14.6 | Sync au démarrage | Si sync activée et online au chargement de la page | `app.js › init` |
+| 14.6 | Sync au démarrage | Si sync activée et online au chargement de la page — `mergedTrash` passé à `onSyncUpdate` | `app.js › init` |
 | 14.7 | Sync sur idle | Si utilisateur actif et dernière sync > 10 min → sync automatique | `sync.js › _startIdleSyncWatcher` |
 | 14.8 | `updatedAt` sur toutes les mutations | Chaque création/modification/déplacement pose `updatedAt = Date.now()` via `touchUpdatedAt()` ou `makeTask()` | `app.js › touchUpdatedAt / makeTask` |
-| 14.9 | `ensureTimestamps` avant merge | Ajoute `updatedAt` aux tâches qui n'en ont pas (migration données anciennes) — n'écrase pas les timestamps existants | `sync.js › ensureTimestamps` |
-| 14.10 | Merge last-write-wins | Tâche présente des deux côtés : la version avec `updatedAt` le plus grand l'emporte sur **tous ses champs** | `sync.js › mergeTasks` |
-| 14.11 | Merge timestamps égaux | Si `updatedAt` identiques (données sans timestamp) : fusion conservative — texte le plus long, notes non vides en priorité | `sync.js › mergeTasks` |
-| 14.12 | Merge enfants toujours récursif | Même si un côté gagne sur les champs scalaires, les `children` sont toujours mergés récursivement | `sync.js › mergeTasks` |
+| 14.9 | `ensureTimestamps` avant merge | Ajoute `updatedAt` aux tâches qui n'en ont pas (migration) — n'écrase **jamais** les timestamps existants | `sync.js › ensureTimestamps` |
+| 14.10 | Merge last-write-wins (champs) | Tâche commune : la version avec `updatedAt` le plus grand gagne sur text, notes, clicks | `sync.js › mergeTasks` |
+| 14.11 | Merge timestamps égaux | Si `updatedAt` identiques : fusion conservative — texte le plus long, notes non vides en priorité | `sync.js › mergeTasks` |
+| 14.12 | Merge enfants toujours récursif | Les `children` sont toujours mergés récursivement, même quand un côté gagne sur les champs scalaires | `sync.js › mergeTasks` |
 | 14.13 | Déplacement local respecté | Tâche présente dans `localAllIds` → pas réinsérée depuis distant (elle est à son nouvel emplacement local) | `sync.js › mergeTasks` |
-| 14.14 | Merge purgedIds anticipé | Les `purgedIds` distants sont intégrés **avant** le merge des tâches, pour respecter les suppressions définitives faites sur l'autre appareil | `sync.js › syncBidirectional` |
-| 14.15 | Merge corbeille | Union locale + distante, local écrase distant si même id, filtrée par TTL 30 j et purgedIds | `sync.js › syncBidirectional` |
-| 14.16 | Merge purgedIds final | Union locale + distante, filtrée par TTL 60 j, persistée avant push | `sync.js › syncBidirectional` |
-| 14.17 | Format Gist | `{ tasks, trash, purgedIds }` — rétrocompatible tableau pur | `sync.js › gistGet / gistPush` |
-| 14.18 | Mode hors-ligne | localStorage = source de vérité, sync jamais bloquante | Architecture globale |
-| 14.19 | Statut sync topbar | Indicateur coloré : ⚫ local / 🟢 ok / 🔄 sync / 🔴 erreur / 🟡 hors-ligne | `sync.js › setSyncStatus` |
-| 14.20 | Clic sur le statut | Déclenche une sync forcée (ou ouvre les paramètres si sync désactivée) | `sync.js › initSyncUI` |
-| 14.21 | Détection réseau | `online/offline` → mise à jour du statut automatique | `sync.js › initSyncUI` |
-| 14.22 | `onSyncUpdate` | Callback appelé après sync — recharge les tâches et préserve la vue courante | `app.js › onSyncUpdate` |
-| 14.23 | Reconstruction navStack | Après sync, `navigationStack` reconstruite depuis les mêmes taskId | `app.js › onSyncUpdate` |
+| 14.14 | Déplacement hiérarchique distant | Si une tâche a changé de niveau côté distant ET distant plus récent → retirée de l'arbre local avant merge → replacée à sa position distante | `sync.js › syncBidirectional › buildParentMap / removeTaskFromTree` |
+| 14.15 | Suppression distante → corbeille locale | Tâches dans la corbeille distante sont ajoutées à `deletedIds` → exclues de l'arbre mergé et intégrées à la corbeille locale | `sync.js › syncBidirectional` |
+| 14.16 | Merge purgedIds anticipé | Les `purgedIds` distants intégrés **avant** le merge → suppressions définitives distantes respectées immédiatement | `sync.js › syncBidirectional` |
+| 14.17 | Merge corbeille | Union locale + distante, local écrase distant si même id, filtrée par TTL 30 j et purgedIds | `sync.js › syncBidirectional` |
+| 14.18 | Merge purgedIds final | Union locale + distante, filtrée par TTL 60 j, persistée avant push | `sync.js › syncBidirectional` |
+| 14.19 | Format Gist | `{ tasks, trash, purgedIds }` — rétrocompatible tableau pur | `sync.js › gistGet / gistPush` |
+| 14.20 | Mode hors-ligne | localStorage = source de vérité, sync jamais bloquante | Architecture globale |
+| 14.21 | Statut sync topbar | Indicateur coloré : ⚫ local / 🟢 ok / 🔄 sync / 🔴 erreur / 🟡 hors-ligne | `sync.js › setSyncStatus` |
+| 14.22 | Clic sur le statut | Déclenche une sync forcée (ou ouvre les paramètres si sync désactivée) | `sync.js › initSyncUI` |
+| 14.23 | Détection réseau | `online/offline` → mise à jour du statut automatique | `sync.js › initSyncUI` |
+| 14.24 | `onSyncUpdate` | Callback après sync — recharge tâches + corbeille, préserve la vue courante | `app.js › onSyncUpdate` |
+| 14.25 | Reconstruction navStack | Après sync, `navigationStack` reconstruite depuis les mêmes taskId | `app.js › onSyncUpdate` |
 
 ---
 
@@ -323,6 +336,9 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `ensureTimestamps` ne doit PAS écraser les `updatedAt` existants | Il ne pose que si absent — sinon il effacerait les timestamps des tâches récemment modifiées |
 | `remotePurgedRaw` intégré **avant** le merge | Sans ça, une tâche supprimée définitivement sur l'autre appareil est réintégrée dans l'arbre local au merge |
 | `syncBidirectional` lit le Gist **avant** de sauvegarder | Garantit que les modifications des autres appareils sont prises en compte avant le push |
+| `remTrash` dans `deletedIds` **avant** le merge | Sans ça, une tâche supprimée sur l'autre appareil reste dans l'arbre local (la corbeille distante était mergée mais les tâches n'étaient pas retirées de l'arbre) |
+| `buildParentMap` + `removeTaskFromTree` avant le merge | Sans ça, un déplacement hiérarchique distant est ignoré : la tâche reste à sa position locale même si le distant est plus récent |
+| `result.trash` passé à `onSyncUpdate` au démarrage | Sans ça, la corbeille distante n'était pas chargée en mémoire au démarrage (mergedTrash ignoré) |
 | `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |
 | `dragReadyTimer` (200 ms) avant tout drag | Si le doigt bouge avant 200 ms → `cleanupTouch()` immédiat, scroll natif, pas de drag |
 | `gestureDone` flag dans `initTouchDrag` | Marque le cycle touch comme terminé quand le long press a déclenché le menu — empêche le touchmove/touchend d'interpréter le lâcher comme un drop |

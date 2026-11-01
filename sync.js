@@ -112,6 +112,44 @@ function collectAllIds(tasks, out = new Set()) {
 }
 
 /**
+ * Construit une Map { taskId → parentId | null } pour tout l'arbre.
+ * parentId = null signifie que la tâche est à la racine.
+ * Utilisée pour détecter les changements de niveau hiérarchique entre local et distant.
+ *
+ * @param {Task[]} tasks   - Arbre de tâches
+ * @param {number|null} parentId - Id du parent courant (null = racine)
+ * @param {Map}   out      - Accumulateur
+ * @returns {Map<number, number|null>}
+ */
+function buildParentMap(tasks, parentId = null, out = new Map()) {
+  for (const t of tasks) {
+    out.set(t.id, parentId);
+    if (t.children && t.children.length) buildParentMap(t.children, t.id, out);
+  }
+  return out;
+}
+
+/**
+ * Retire récursivement une tâche (par id) d'un arbre, en place.
+ * Retourne true si la tâche a été trouvée et retirée.
+ * Utilisée pour repositionner une tâche qui a changé de niveau hiérarchique.
+ *
+ * @param {Task[]} tasks  - Arbre de tâches (modifié en place)
+ * @param {number} taskId - Id de la tâche à retirer
+ * @returns {boolean}
+ */
+function removeTaskFromTree(tasks, taskId) {
+  for (let i = 0; i < tasks.length; i++) {
+    if (tasks[i].id === taskId) {
+      tasks.splice(i, 1);
+      return true;
+    }
+    if (tasks[i].children && removeTaskFromTree(tasks[i].children, taskId)) return true;
+  }
+  return false;
+}
+
+/**
  * Fusionne deux arbres de tâches.
  *
  * Stratégie détaillée :
@@ -279,11 +317,18 @@ async function gistPush(token, gistId, payload) {
 
 /**
  * Synchronisation bidirectionnelle (merge + push).
- * 1. Récupère les données distantes
- * 2. Merge avec les données locales
- * 3. Sauvegarde le résultat localement
- * 4. Envoie le résultat dans le Gist
- * @returns {{ ok: boolean, message: string, tasks?: Task[] }}
+ *
+ * Séquence :
+ *  1. Récupère les données distantes (Gist)
+ *  2. Calcule les ids à exclure du merge (corbeille locale + distante + purgedIds)
+ *  3. Retire de l'arbre local les tâches qui ont changé de niveau hiérarchique
+ *     côté distant et dont le distant est plus récent (pour laisser le merge
+ *     les repositionner à leur place distante)
+ *  4. Merge les données scalaires (text, notes, clicks) avec last-write-wins
+ *  5. Merge la corbeille (union locale + distante)
+ *  6. Sauvegarde le résultat localement et pousse dans le Gist
+ *
+ * @returns {{ ok: boolean, message: string, tasks?: Task[], trash?: object[] }}
  */
 async function syncBidirectional() {
   const { token, gistId } = getSyncConfig();
@@ -293,53 +338,111 @@ async function syncBidirectional() {
   syncInProgress = true;
   setSyncStatus('syncing');
   try {
-    const remote     = await gistGet(token, gistId);
+    // ── 1. Lecture des données ────────────────────────────────────────────────
+    const remote = await gistGet(token, gistId);
 
-    // On horodate les tâches locales UNIQUEMENT si elles n'ont pas déjà un updatedAt.
-    // Les tâches modifiées récemment ont déjà un updatedAt frais posé par touchUpdatedAt().
-    // ensureTimestamps() ne les écrase PAS (il ne pose que si absent).
+    // ensureTimestamps() ajoute updatedAt aux tâches qui n'en ont pas (données
+    // migrées depuis une ancienne version). Elle NE remplace PAS les timestamps
+    // existants — les tâches récemment modifiées gardent leur updatedAt frais.
     const localTasks = ensureTimestamps(JSON.parse(localStorage.getItem('tasks') || '[]'));
     const remTasks   = ensureTimestamps(remote.tasks || []);
 
-    // ── Construction du set des ids exclus du merge ──────────────────────────
-    // 1. Ids en corbeille locale (supprimés sur cet appareil)
-    const localTrash  = JSON.parse(localStorage.getItem('trash') || '[]');
-    const deletedIds  = new Set();
+    const now = Date.now();
+
+    // ── 2. Construction du set des ids à exclure du merge ────────────────────
+
+    // 2a. Corbeille locale : tâches supprimées sur CET appareil
+    const localTrash = JSON.parse(localStorage.getItem('trash') || '[]');
+    const deletedIds = new Set();
     localTrash.forEach(e => collectAllIds([e.task], deletedIds));
 
-    // 2. Ids purgés définitivement (locale + distante) → union avant le merge
-    //    pour que les suppressions définitives faites sur l'autre appareil
-    //    soient respectées immédiatement ici.
+    // 2b. Corbeille distante : tâches supprimées sur l'AUTRE appareil.
+    //     Ces tâches doivent aussi disparaître de l'arbre local.
+    //     On les ajoute dans deletedIds pour que mergeTasks les exclue,
+    //     et on les intégrera dans la corbeille locale plus bas.
+    const remTrash = remote.trash || [];
+    remTrash.forEach(e => collectAllIds([e.task], deletedIds));
+
+    // 2c. PurgedIds (suppressions définitives) : union locale + distante.
+    //     Intégrés AVANT le merge pour que les suppressions définitives faites
+    //     sur l'autre appareil soient respectées immédiatement ici.
     const localPurgedRaw  = JSON.parse(localStorage.getItem('purgedIds') || '[]');
     const remotePurgedRaw = remote.purgedIds || [];
     const purgedMap       = new Map();
     [...remotePurgedRaw, ...localPurgedRaw].forEach(e => purgedMap.set(e.id, e));
-    const PURGED_TTL = 60 * 24 * 60 * 60 * 1000;
-    const now        = Date.now();
+    const PURGED_TTL   = 60 * 24 * 60 * 60 * 1000;
     const mergedPurged = Array.from(purgedMap.values())
       .filter(e => now - e.purgedAt < PURGED_TTL);
-    // Ajoute les ids purgés distants dans deletedIds pour les exclure du merge
+    // Les ids purgés sont aussi exclus du merge (ni dans l'arbre, ni en corbeille)
     mergedPurged.forEach(e => deletedIds.add(e.id));
 
-    // ── Merge des tâches ─────────────────────────────────────────────────────
-    const localAllIds = collectAllIds(localTasks);
-    const merged = mergeTasks(localTasks, remTasks, deletedIds, localAllIds);
+    // ── 3. Repositionnement hiérarchique distant ──────────────────────────────
+    // Si une tâche a changé de niveau dans l'arbre côté distant (ex : elle était
+    // racine en local et est devenue sous-tâche en distant), ET que le distant est
+    // plus récent, on retire la tâche de l'arbre local pour laisser le merge
+    // la replacer à sa position distante.
+    //
+    // On compare les parentId locaux et distants pour chaque tâche commune.
+    const localParentMap  = buildParentMap(localTasks);
+    const remoteParentMap = buildParentMap(remTasks);
+    // On travaille sur une copie mutable pour ne pas altérer localTasks avant le merge
+    const localTasksMut = JSON.parse(JSON.stringify(localTasks));
 
-    // ── Merge de la corbeille : union locale + distante, dédoublonnée ───────
-    // On préfère la version la plus récente en cas de doublon (même task.id).
-    const remTrash = remote.trash || [];
+    for (const [taskId, remParentId] of remoteParentMap) {
+      if (!localParentMap.has(taskId)) continue;       // tâche inconnue localement → le merge s'en charge
+      if (deletedIds.has(taskId)) continue;             // supprimée → pas besoin de déplacer
+
+      const localParentId = localParentMap.get(taskId);
+      if (localParentId === remParentId) continue;      // même niveau → pas de déplacement
+
+      // Niveau différent : qui est le plus récent ?
+      // On cherche la tâche dans les deux arbres pour comparer les updatedAt.
+      const findById = (list, id) => {
+        for (const t of list) {
+          if (t.id === id) return t;
+          const found = findById(t.children || [], id);
+          if (found) return found;
+        }
+        return null;
+      };
+      const localTask  = findById(localTasksMut, taskId);
+      const remoteTask = findById(remTasks,      taskId);
+      if (!localTask || !remoteTask) continue;
+
+      const lTs = localTask.updatedAt  || 0;
+      const rTs = remoteTask.updatedAt || 0;
+      if (rTs <= lTs) continue; // local plus récent ou égal → on garde la position locale
+
+      // Le distant est plus récent ET la tâche est à un niveau différent :
+      // on retire la tâche de l'arbre local. Elle sera réinsérée par mergeTasks
+      // à sa position distante (CAS 3 du merge : uniquement côté distant).
+      // Important : on retire aussi ses descendants locaux, car le merge distant
+      // les reconstruira depuis remTasks.
+      removeTaskFromTree(localTasksMut, taskId);
+    }
+
+    // ── 4. Merge des tâches ───────────────────────────────────────────────────
+    // localAllIds est calculé après les éventuels retraits de l'étape 3.
+    const localAllIds = collectAllIds(localTasksMut);
+    const merged = mergeTasks(localTasksMut, remTasks, deletedIds, localAllIds);
+
+    // ── 5. Merge de la corbeille ──────────────────────────────────────────────
+    // Union locale + distante, dédoublonnée par task.id.
+    // Pour chaque doublon, on garde la version locale (présente dans le Map en dernier).
+    // On exclut les entrées expirées (TTL 30 j) et celles dont l'id est purgé.
     const trashMap = new Map();
-    // remote d'abord, local ensuite : local écrase remote si même id (local = plus à jour)
+    // Remote en premier, local en dernier → local écrase remote pour le même id
     [...remTrash, ...localTrash].forEach(e => trashMap.set(e.task.id, e));
 
-    // Le set des purgedIds déjà calculé sert à exclure de la corbeille mergée
+    // Les tâches dans la corbeille distante (mais pas locale) sont ajoutées ici :
+    // elles étaient déjà exclues de l'arbre merged à l'étape 2b.
     const purgedIdsSet = new Set(mergedPurged.map(e => e.id));
     const TRASH_TTL    = 30 * 24 * 60 * 60 * 1000;
     const mergedTrash  = Array.from(trashMap.values())
-      .filter(e => now - e.deletedAt < TRASH_TTL)
-      .filter(e => !purgedIdsSet.has(e.task.id));
+      .filter(e => now - e.deletedAt < TRASH_TTL)   // expire après 30 j
+      .filter(e => !purgedIdsSet.has(e.task.id));   // exclut les purgés définitivement
 
-    // ── Persistence et push ──────────────────────────────────────────────────
+    // ── 6. Persistence locale et push Gist ───────────────────────────────────
     localStorage.setItem('purgedIds', JSON.stringify(mergedPurged));
     localStorage.setItem('tasks',     JSON.stringify(merged));
     localStorage.setItem('trash',     JSON.stringify(mergedTrash));
