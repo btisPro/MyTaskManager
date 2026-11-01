@@ -1191,24 +1191,34 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   });
 
   // dragover/drop intra-liste : uniquement hors mode recherche
-  // et uniquement si la source est bien cette même liste (réordonnement)
+  // et uniquement si la source est bien cette même liste (réordonnement ou mise en sous-tâche)
   if (!searchResultMode) {
     li.addEventListener('dragover', function(e) {
       if (dragListRef !== tasks) return;
       e.preventDefault();
-      // Détermine si la souris est dans la moitié haute ou basse du li
-      const rect   = this.getBoundingClientRect();
-      const isTop  = e.clientY < rect.top + rect.height / 2;
+
+      const rect    = this.getBoundingClientRect();
+      const relY    = e.clientY - rect.top;
+      const third   = rect.height / 3;
+
       // Nettoie tous les indicateurs de la liste
       listEl.querySelectorAll('.task-item').forEach(el => {
-        el.classList.remove('drop-before', 'drop-after');
+        el.classList.remove('drop-before', 'drop-after', 'drop-child');
       });
-      this.classList.add(isTop ? 'drop-before' : 'drop-after');
+
+      // Tiers haut → insérer avant, tiers bas → insérer après, tiers central → sous-tâche
+      if (relY < third) {
+        this.classList.add('drop-before');
+      } else if (relY > third * 2) {
+        this.classList.add('drop-after');
+      } else {
+        this.classList.add('drop-child');
+      }
     });
 
     li.addEventListener('dragleave', function(e) {
       if (!this.contains(e.relatedTarget)) {
-        this.classList.remove('drop-before', 'drop-after');
+        this.classList.remove('drop-before', 'drop-after', 'drop-child');
       }
     });
 
@@ -1216,23 +1226,37 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
       if (dragListRef !== tasks) return;
       e.preventDefault();
       e.stopPropagation();
-      // Lit si on insère avant ou après ce li
-      const insertBefore = this.classList.contains('drop-before');
-      this.classList.remove('drop-before', 'drop-after');
+
+      const isChild  = this.classList.contains('drop-child');
+      const isBefore = this.classList.contains('drop-before');
+      this.classList.remove('drop-before', 'drop-after', 'drop-child');
 
       const destId = parseInt(this.dataset.taskId);
       const srcId  = dragSrcIndex;
       if (!srcId || srcId === destId) return;
 
-      const srcIdx  = tasks.findIndex(t => t.id === srcId);
-      let   destIdx = tasks.findIndex(t => t.id === destId);
+      const srcIdx = tasks.findIndex(t => t.id === srcId);
+      let  destIdx = tasks.findIndex(t => t.id === destId);
       if (srcIdx === -1 || destIdx === -1) return;
 
-      const [moved] = tasks.splice(srcIdx, 1);
-      // Recalcule destIdx après le splice (le tableau a bougé d'un cran)
-      destIdx = tasks.findIndex(t => t.id === destId);
-      const insertIdx = insertBefore ? destIdx : destIdx + 1;
-      tasks.splice(insertIdx, 0, moved);
+      const destTask = tasks[destIdx];
+
+      if (isChild) {
+        // ── Drop centre : la tâche source devient sous-tâche de la cible ──
+        // Vérifie que la cible n'est pas descendante de la source (cycle interdit)
+        if (isDescendantOrSelf(destId, srcId, rootTasks)) return;
+        const [moved] = tasks.splice(srcIdx, 1);
+        destTask.children.unshift(moved);
+        // Ouvre le nœud cible dans l'arbre pour que la sous-tâche soit visible
+        treeCollapsed[destId] = false;
+        localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
+      } else {
+        // ── Drop haut/bas : réordonnement dans la même liste ──
+        const [moved] = tasks.splice(srcIdx, 1);
+        destIdx = tasks.findIndex(t => t.id === destId); // recalcule après splice
+        const insertIdx = isBefore ? destIdx : destIdx + 1;
+        tasks.splice(insertIdx, 0, moved);
+      }
 
       dragSrcIndex = null;
       dragListRef  = null;
@@ -1929,6 +1953,270 @@ function findTaskById(list, id) {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   TOUCH DRAG — Drag & Drop tactile pour mobile
+   ─────────────────────────────────────────────────────────
+   Le Drag & Drop HTML5 natif ne fonctionne pas sur mobile.
+   On implémente un système complet via les Touch Events :
+
+   1. touchstart  → démarre un timer (500 ms) pour le long press
+   2. touchmove   → si le doigt bouge > seuil avant 500 ms → annule le long press
+                    si drag actif → déplace le ghost et surligne la cible
+   3. touchend    → si long press détecté → affiche le menu contextuel
+                    si drag actif → applique le déplacement (réordonnement ou sous-tâche)
+
+   Le système est initialisé une seule fois sur le conteneur
+   (event delegation), robuste aux re-renders de renderList().
+════════════════════════════════════════════════════════════ */
+
+/**
+ * Initialise la gestion du drag tactile et du long press sur un conteneur de liste.
+ * Doit être appelé UNE SEULE FOIS par conteneur (taskListEl et subTaskListEl).
+ *
+ * @param {HTMLElement} containerEl - Le <ul> contenant les tâches
+ * @param {Function}    getTasksFn  - Fonction retournant le tableau de tâches courant
+ */
+function initTouchDrag(containerEl, getTasksFn) {
+  const LONG_PRESS_DELAY = 500;  // ms avant de déclencher le menu ou le drag
+  const MOVE_THRESHOLD   = 8;    // px : mouvement en-dessous duquel on reste en "long press"
+
+  let longPressTimer = null;     // timer du long press
+  let touchSrcTask   = null;     // tâche source du drag tactile
+  let touchSrcList   = null;     // tableau source
+  let touchGhost     = null;     // élément DOM ghost qui suit le doigt
+  let isDragging     = false;    // true une fois le drag tactile démarré
+  let startX = 0, startY = 0;   // position du touchstart
+  let menuShown      = false;    // true si le menu contextuel est affiché
+
+  // ── Helpers internes ──────────────────────────────────────
+
+  /** Trouve l'élément <li class="task-item"> sous les coordonnées (x, y), en excluant le ghost. */
+  function getTaskItemAt(x, y) {
+    // On cache temporairement le ghost pour ne pas le cibler avec elementFromPoint
+    if (touchGhost) touchGhost.style.display = 'none';
+    const el = document.elementFromPoint(x, y);
+    if (touchGhost) touchGhost.style.display = '';
+    return el ? el.closest('.task-item') : null;
+  }
+
+  /** Crée et attache au DOM un ghost visuel qui suit le doigt. */
+  function createTouchGhost(li, x, y) {
+    const rect = li.getBoundingClientRect();
+    touchGhost = li.cloneNode(true);
+    touchGhost.id = 'touchDragGhost';
+    Object.assign(touchGhost.style, {
+      position:      'fixed',
+      left:          rect.left + 'px',
+      top:           rect.top  + 'px',
+      width:         rect.width + 'px',
+      opacity:       '0.75',
+      pointerEvents: 'none',
+      zIndex:        '9999',
+      background:    '#eef2ff',
+      border:        '2px solid #4f46e5',
+      borderRadius:  '6px',
+      boxShadow:     '0 4px 16px rgba(79,70,229,0.3)',
+      transform:     'scale(1.03)',
+      transition:    'none',
+    });
+    document.body.appendChild(touchGhost);
+  }
+
+  /** Déplace le ghost pour suivre le doigt, en gardant le décalage initial. */
+  function moveTouchGhost(x, y) {
+    if (!touchGhost) return;
+    const rect = touchGhost.getBoundingClientRect();
+    touchGhost.style.left = (x - rect.width / 2) + 'px';
+    touchGhost.style.top  = (y - 20) + 'px';
+  }
+
+  /** Supprime le ghost et nettoie tous les indicateurs visuels. */
+  function cleanupTouch() {
+    if (touchGhost) { touchGhost.remove(); touchGhost = null; }
+    containerEl.querySelectorAll('.task-item').forEach(el =>
+      el.classList.remove('drop-before', 'drop-after', 'drop-child', 'touch-src'));
+    document.body.classList.remove('dragging-active');
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    touchSrcTask   = null;
+    touchSrcList   = null;
+    isDragging     = false;
+    menuShown      = false;
+  }
+
+  // ── touchstart ────────────────────────────────────────────
+  containerEl.addEventListener('touchstart', (e) => {
+    // On ne gère que le touch sur un .task-item (ou ses enfants)
+    const li = e.target.closest('.task-item');
+    if (!li) return;
+
+    // Si le toucher est sur un bouton interactif, on laisse l'événement passer
+    if (e.target.closest('button, a, input, .task-detail-btn, .task-delete')) return;
+
+    const touch = e.touches[0];
+    startX = touch.clientX;
+    startY = touch.clientY;
+    menuShown  = false;
+    isDragging = false;
+
+    const taskId = parseInt(li.dataset.taskId);
+    const tasks  = getTasksFn();
+    touchSrcTask = tasks.find(t => t.id === taskId) || null;
+    touchSrcList = tasks;
+
+    if (!touchSrcTask) return;
+
+    // Démarre le timer du long press
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (isDragging) return; // drag déjà en cours, ne pas montrer le menu
+
+      // Vibration haptique si disponible
+      if (navigator.vibrate) navigator.vibrate(40);
+
+      // Affiche le menu contextuel positionné sous le doigt
+      const fakeEvent = {
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        clientX: startX,
+        clientY: startY,
+      };
+      menuShown = true;
+      showContextMenu(fakeEvent, touchSrcTask, touchSrcList, containerEl);
+    }, LONG_PRESS_DELAY);
+
+  }, { passive: true });
+
+  // ── touchmove ─────────────────────────────────────────────
+  containerEl.addEventListener('touchmove', (e) => {
+    if (!touchSrcTask) return;
+
+    const touch = e.touches[0];
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (menuShown) {
+      // Si le menu est affiché et que le doigt sort du menu → on annule le menu et on démarre le drag
+      const menuEl = document.getElementById('ctxMenu');
+      if (menuEl && !menuEl.classList.contains('hidden')) {
+        const menuRect = menuEl.getBoundingClientRect();
+        const inMenu = touch.clientX >= menuRect.left && touch.clientX <= menuRect.right
+                    && touch.clientY >= menuRect.top  && touch.clientY <= menuRect.bottom;
+        if (!inMenu && dist > MOVE_THRESHOLD) {
+          hideContextMenu();
+          menuShown = false;
+          // On démarre le drag à partir de la position actuelle
+          startX = touch.clientX;
+          startY = touch.clientY;
+        } else {
+          return; // reste dans le menu : laisse l'utilisateur choisir
+        }
+      }
+    }
+
+    if (!isDragging) {
+      if (dist < MOVE_THRESHOLD) return; // pas encore assez bougé pour démarrer le drag
+
+      // Annule le long press si on a bougé avant 500 ms
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+
+      // Démarre le drag tactile
+      isDragging = true;
+      document.body.classList.add('dragging-active');
+      if (navigator.vibrate) navigator.vibrate(20);
+
+      // Cherche le <li> source pour créer le ghost
+      const srcLi = containerEl.querySelector(`[data-task-id="${touchSrcTask.id}"]`);
+      if (srcLi) {
+        srcLi.classList.add('touch-src');
+        createTouchGhost(srcLi, touch.clientX, touch.clientY);
+      }
+    }
+
+    // Drag actif : empêche le scroll et déplace le ghost
+    e.preventDefault();
+    moveTouchGhost(touch.clientX, touch.clientY);
+
+    // Surligne la cible sous le doigt
+    containerEl.querySelectorAll('.task-item').forEach(el =>
+      el.classList.remove('drop-before', 'drop-after', 'drop-child'));
+
+    const targetLi = getTaskItemAt(touch.clientX, touch.clientY);
+    if (targetLi && targetLi.dataset.taskId !== String(touchSrcTask.id)) {
+      const rect  = targetLi.getBoundingClientRect();
+      const relY  = touch.clientY - rect.top;
+      const third = rect.height / 3;
+      if (relY < third) {
+        targetLi.classList.add('drop-before');
+      } else if (relY > third * 2) {
+        targetLi.classList.add('drop-after');
+      } else {
+        targetLi.classList.add('drop-child');
+      }
+    }
+
+  }, { passive: false });
+
+  // ── touchend ──────────────────────────────────────────────
+  containerEl.addEventListener('touchend', (e) => {
+    clearTimeout(longPressTimer);
+
+    if (!isDragging) {
+      // Pas de drag → le touchend est un simple tap ou la fin du long press (menu déjà affiché)
+      cleanupTouch();
+      return;
+    }
+
+    const touch = e.changedTouches[0];
+    const targetLi = getTaskItemAt(touch.clientX, touch.clientY);
+
+    if (targetLi && targetLi.dataset.taskId !== String(touchSrcTask.id)) {
+      const destId   = parseInt(targetLi.dataset.taskId);
+      const tasks    = getTasksFn();
+      const srcId    = touchSrcTask.id;
+      const srcIdx   = tasks.findIndex(t => t.id === srcId);
+      let   destIdx  = tasks.findIndex(t => t.id === destId);
+
+      if (srcIdx !== -1 && destIdx !== -1) {
+        const isChild  = targetLi.classList.contains('drop-child');
+        const isBefore = targetLi.classList.contains('drop-before');
+
+        if (isChild) {
+          // ── Drop centre : sous-tâche ──
+          if (!isDescendantOrSelf(destId, srcId, rootTasks)) {
+            const destTask = tasks[destIdx];
+            const [moved]  = tasks.splice(srcIdx, 1);
+            destTask.children.unshift(moved);
+            treeCollapsed[destId] = false;
+            localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
+            saveTasks();
+            renderList(containerEl, tasks);
+            renderTree();
+          }
+        } else {
+          // ── Drop haut/bas : réordonnement ──
+          const [moved] = tasks.splice(srcIdx, 1);
+          destIdx = tasks.findIndex(t => t.id === destId);
+          const insertIdx = isBefore ? destIdx : destIdx + 1;
+          tasks.splice(insertIdx, 0, moved);
+          saveTasks();
+          renderList(containerEl, tasks);
+          renderTree();
+        }
+      }
+    }
+
+    cleanupTouch();
+  }, { passive: true });
+
+  // touchcancel : nettoyage propre si le système annule le touch (ex: appel entrant)
+  containerEl.addEventListener('touchcancel', () => {
+    cleanupTouch();
+  }, { passive: true });
+}
+
+/* ═══════════════════════════════════════════════════════════
    INIT — Point d'entrée
 ════════════════════════════════════════════════════════════ */
 
@@ -1955,5 +2243,12 @@ if (typeof initWelcomeModal === 'function') {
 initTrashUI();             // initialise la modale corbeille
 updateTrashBadge();        // affiche le badge si des éléments sont en corbeille
 initTreeDropDelegation();  // gestion drop sidebar via event delegation (une seule fois)
+
+// Drag tactile sur la liste racine : getTasksFn lit rootTasks en live
+initTouchDrag(taskListEl, () => rootTasks);
+
+// Drag tactile sur la liste de sous-tâches : lit le niveau courant de la navigationStack
+initTouchDrag(subTaskListEl, () => navigationStack[navigationStack.length - 1].tasks);
+
 renderTree();              // construit l'arborescence dans la sidebar
 showList();                // affiche la liste principale des tâches

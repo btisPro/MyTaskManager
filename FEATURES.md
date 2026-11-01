@@ -121,15 +121,27 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 ## 9. Drag & Drop
 
-### 9.1 Drag depuis la liste centrale (réordonnement intra-liste)
+### 9.1 Drag depuis la liste centrale (réordonnement intra-liste) — Souris
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 9.1.1 | Drag d'un `<li>` | Déplace une tâche dans sa propre liste | `app.js › buildTaskItem › dragstart` |
+| 9.1.1 | Drag d'un `<li>` | Déplace une tâche dans sa propre liste via drag HTML5 | `app.js › buildTaskItem › dragstart` |
 | 9.1.2 | Ligne d'insertion | Pseudo-élément bleu 3px avant/après le `<li>` cible (classes `drop-before`/`drop-after`) | `app.js › dragover / style.css` |
-| 9.1.3 | Moitié haute/basse | La ligne d'insertion se positionne selon la moitié du `<li>` survolée | `app.js › dragover` |
-| 9.1.4 | `dragSrcIndex` = id | Stocke l'id de la tâche source (robuste aux réordonnements) | `app.js › dragstart` |
-| 9.1.5 | Recalcul destIdx post-splice | Index recalculé après le `splice` pour éviter les décalages | `app.js › drop` |
+| 9.1.3 | Tiers haut/bas/centre | La zone cible est divisée en 3 tiers : tiers haut = insérer avant, tiers bas = insérer après, **tiers central = déplacer en sous-tâche** | `app.js › dragover / drop` |
+| 9.1.4 | Drop centre = sous-tâche | Si relâché dans le tiers central de la cible → la tâche source devient le premier enfant de la tâche cible (classe `drop-child`) | `app.js › drop` |
+| 9.1.5 | `dragSrcIndex` = id | Stocke l'id de la tâche source (robuste aux réordonnements) | `app.js › dragstart` |
+| 9.1.6 | Recalcul destIdx post-splice | Index recalculé après le `splice` pour éviter les décalages | `app.js › drop` |
+
+### 9.1b Drag tactile (mobile) — Touch events
+
+| # | Fonctionnalité | Détail | Fichier / Fonction |
+|---|---|---|---|
+| 9.1b.1 | Long press (500 ms) | Maintenir le doigt sur une tâche 500 ms → affiche le menu contextuel touch-friendly sous le doigt | `app.js › initTouchDrag › longPressTimer` |
+| 9.1b.2 | Glisser pendant le menu | Si le doigt se déplace hors du menu pendant/après l'affichage → annule le menu et démarre un drag tactile | `app.js › initTouchDrag › touchmove` |
+| 9.1b.3 | Ghost visuel tactile | Une copie semi-transparente de la tâche suit le doigt pendant le drag tactile | `app.js › initTouchDrag › touchDragGhost` |
+| 9.1b.4 | Indicateur de position | Même logique que souris : tiers haut/bas = ligne d'insertion, tiers central = mise en sous-tâche (`drop-child`) | `app.js › initTouchDrag › touchmove` |
+| 9.1b.5 | Drop au relâchement | `touchend` identifie la tâche cible sous le doigt et applique le déplacement (réordonnement ou sous-tâche) | `app.js › initTouchDrag › touchend` |
+| 9.1b.6 | Annulation | Si le doigt revient sur la tâche source ou sort de la liste → annulation propre | `app.js › initTouchDrag › touchend` |
 
 ### 9.2 Drag vers l'arbre (déplacement entre niveaux)
 
@@ -162,15 +174,17 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 ---
 
-## 10. Menu contextuel (clic droit)
+## 10. Menu contextuel (clic droit / long press)
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 10.1 | Affichage au clic droit | Menu positionné à la souris, repositionné pour rester dans le viewport | `app.js › showContextMenu` |
-| 10.2 | Options de déplacement | ⬆ Tout en haut, ▲+5, ▲+10, ▲+20, ▼-5, ▼-10, ▼-20 positions | `app.js › showContextMenu › items` |
-| 10.3 | Vrai parent retrouvé | En mode recherche, `findParentList` retrouve le vrai tableau parent | `app.js › showContextMenu` |
-| 10.4 | Rafraîchissement adapté | Relance `runSearch()` si mode recherche, sinon `renderList` | `app.js › showContextMenu` |
-| 10.5 | Fermeture automatique | Sur clic ailleurs, scroll, ou touche Échap | `app.js › document click / scroll / keydown` |
+| 10.1 | Affichage au clic droit (desktop) | Menu positionné à la souris, repositionné pour rester dans le viewport | `app.js › showContextMenu` |
+| 10.2 | Affichage au long press (mobile) | Maintenir 500 ms sur une tâche → même menu, positionné sous le doigt, items plus hauts pour le touch | `app.js › initTouchDrag › longPressTimer` |
+| 10.3 | Options de déplacement | ⬆ Tout en haut, ▲+5, ▲+10, ▲+20, ▼-5, ▼-10, ▼-20 positions | `app.js › showContextMenu › items` |
+| 10.4 | Vrai parent retrouvé | En mode recherche, `findParentList` retrouve le vrai tableau parent | `app.js › showContextMenu` |
+| 10.5 | Rafraîchissement adapté | Relance `runSearch()` si mode recherche, sinon `renderList` | `app.js › showContextMenu` |
+| 10.6 | Fermeture automatique | Sur clic/tap ailleurs, scroll, ou touche Échap | `app.js › document click / scroll / keydown` |
+| 10.7 | Glisser hors du menu (mobile) | Si le doigt glisse hors du menu après un long press → ferme le menu et démarre un drag tactile | `app.js › initTouchDrag` |
 
 ---
 
@@ -296,3 +310,7 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `findParentList` dans le menu contextuel | En mode recherche, `tasks` est un tableau temporaire — le vrai parent doit être retrouvé |
 | `collectAllIds([e.task], deletedIds)` dans `syncBidirectional` | Inclut les descendants des tâches en corbeille dans les ids supprimés |
 | `localAllIds` dans `mergeTasks` | Sans ça, un déplacement local est interprété comme une nouvelle tâche distante |
+| `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |
+| Long press : `clearTimeout` sur `touchmove` > seuil | Si le doigt bouge avant 500 ms, annuler le timer pour ne pas déclencher le menu |
+| Touch drag : `e.preventDefault()` dans `touchmove` | Empêche le scroll de la page pendant le drag tactile |
+| Drop-center (sous-tâche) : vérifier `isDescendantOrSelf` | Interdire de dropper une tâche sur l'un de ses propres descendants |

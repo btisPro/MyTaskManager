@@ -496,6 +496,27 @@ h2:hover { color: var(--accent); }
 .task-item.drop-before::before { top: -3px; }
 .task-item.drop-after::after  { bottom: -3px; }
 
+/* Drop centre : la tâche source va devenir sous-tâche de la cible */
+.task-item.drop-child {
+  background: #eef2ff;
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Tâche source pendant un drag tactile : réduite en opacité */
+.task-item.touch-src {
+  opacity: 0.35;
+}
+
+/* Menu contextuel : items plus hauts sur touch pour faciliter le tap mobile */
+@media (pointer: coarse) {
+  .ctx-item {
+    padding: 14px 18px;
+    font-size: 1rem;
+  }
+}
+
 .task-rank {
   font-size: 0.6rem;
   font-weight: 700;
