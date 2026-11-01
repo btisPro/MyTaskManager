@@ -136,14 +136,15 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 9.1b.1 | Long press (500 ms) | Maintenir le doigt **immobile** sur une tâche 500 ms → affiche le menu contextuel touch-friendly sous le doigt | `app.js › initTouchDrag › longPressTimer` |
-| 9.1b.2 | Délai drag (200 ms) | Le drag ne peut démarrer qu'après 200 ms d'appui immobile. Avant ce délai, tout mouvement = scroll normal. Cela évite de déclencher le drag accidentellement en scrollant. | `app.js › initTouchDrag › dragReadyTimer / dragReady` |
-| 9.1b.3 | Glisser après délai | Après 200 ms d'appui, bouger le doigt > seuil → annule le long press et démarre le drag tactile | `app.js › initTouchDrag › touchmove` |
-| 9.1b.4 | Glisser hors du menu | Si le doigt sort du menu après long press → ferme le menu et démarre le drag | `app.js › initTouchDrag › touchmove` |
-| 9.1b.5 | Ghost visuel tactile | Une copie semi-transparente de la tâche suit le doigt pendant le drag tactile | `app.js › initTouchDrag › createTouchGhost` |
-| 9.1b.6 | Indicateur de position | Même logique que souris : tiers haut/bas = ligne d'insertion, tiers central = mise en sous-tâche (`drop-child`) | `app.js › initTouchDrag › touchmove` |
+| 9.1b.1 | Délai scroll (200 ms) | Le drag ne peut démarrer qu'après 200 ms d'appui immobile. Avant ce délai, tout mouvement = scroll normal. Évite les drags accidentels au scroll. | `app.js › initTouchDrag › dragReadyTimer / dragReady` |
+| 9.1b.2 | Glisser après délai | Après 200 ms d'appui immobile, bouger le doigt > 10 px → annule le long press et démarre le drag tactile | `app.js › initTouchDrag › touchmove` |
+| 9.1b.3 | Long press (500 ms) | Maintenir le doigt **immobile** ≥ 500 ms → affiche le menu contextuel touch-friendly. Le geste est alors **terminé** : lever le doigt et reposer pour draguer. | `app.js › initTouchDrag › longPressTimer` |
+| 9.1b.4 | Gestes mutuellement exclusifs | Sur un même cycle touch, soit le menu, soit le drag — jamais les deux. Le flag `gestureDone` bloque le drag si le menu s'est déclenché. Pour draguer après le menu, l'utilisateur doit reposer le doigt (nouveau `touchstart`). | `app.js › initTouchDrag › gestureDone` |
+| 9.1b.5 | Ghost visuel tactile | Une copie semi-transparente de la tâche suit le doigt pendant le drag (centré horizontalement, décalé -20 px vertical) | `app.js › initTouchDrag › createTouchGhost` |
+| 9.1b.6 | Indicateur de position | Même logique que souris : tiers haut/bas = ligne d'insertion (`drop-before`/`drop-after`), tiers central = mise en sous-tâche (`drop-child`) | `app.js › initTouchDrag › touchmove` |
 | 9.1b.7 | Drop au relâchement | `touchend` identifie la tâche cible sous le doigt et applique le déplacement (réordonnement ou sous-tâche) | `app.js › initTouchDrag › touchend` |
 | 9.1b.8 | Annulation propre | `touchcancel` (appel entrant, etc.) nettoie ghost et indicateurs sans appliquer de déplacement | `app.js › initTouchDrag › touchcancel` |
+| 9.1b.9 | `touchstart` non-passif | Le listener `touchstart` est déclaré `{ passive: false }` pour autoriser `preventDefault()` dans `touchmove` pendant le drag (bloque le scroll natif) | `app.js › initTouchDrag` |
 
 ### 9.2 Drag vers l'arbre (déplacement entre niveaux)
 
@@ -186,7 +187,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 10.4 | Vrai parent retrouvé | En mode recherche, `findParentList` retrouve le vrai tableau parent | `app.js › showContextMenu` |
 | 10.5 | Rafraîchissement adapté | Relance `runSearch()` si mode recherche, sinon `renderList` | `app.js › showContextMenu` |
 | 10.6 | Fermeture automatique | Sur clic/tap ailleurs, scroll, ou touche Échap | `app.js › document click / scroll / keydown` |
-| 10.7 | Glisser hors du menu (mobile) | Si le doigt glisse hors du menu après un long press → ferme le menu et démarre un drag tactile | `app.js › initTouchDrag` |
+| 10.7 | Drag après menu (mobile) | Après fermeture du menu long press, l'utilisateur doit lever le doigt et reposer pour draguer. Long press et drag sont mutuellement exclusifs sur un même cycle touch (`gestureDone`). | `app.js › initTouchDrag › gestureDone` |
 
 ---
 
@@ -323,7 +324,9 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `remotePurgedRaw` intégré **avant** le merge | Sans ça, une tâche supprimée définitivement sur l'autre appareil est réintégrée dans l'arbre local au merge |
 | `syncBidirectional` lit le Gist **avant** de sauvegarder | Garantit que les modifications des autres appareils sont prises en compte avant le push |
 | `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |
-| `dragReadyTimer` (200 ms) avant tout drag | Si le doigt bouge avant 200 ms → scroll normal, les deux timers sont annulés, `touchSrcTask = null` |
-| Long press : `clearTimeout` sur `touchmove` > seuil | Si le doigt bouge après 200 ms mais avant 500 ms → annule le long press, démarre le drag |
-| Touch drag : `e.preventDefault()` dans `touchmove` seulement si `isDragging` | Avant que le drag soit actif, ne pas bloquer le scroll natif |
+| `dragReadyTimer` (200 ms) avant tout drag | Si le doigt bouge avant 200 ms → `cleanupTouch()` immédiat, scroll natif, pas de drag |
+| `gestureDone` flag dans `initTouchDrag` | Marque le cycle touch comme terminé quand le long press a déclenché le menu — empêche le touchmove/touchend d'interpréter le lâcher comme un drop |
+| Long press et drag **mutuellement exclusifs** sur un même cycle | Si le menu s'affiche (500 ms), `gestureDone = true` → le drag est impossible sur ce cycle. Pour draguer, l'utilisateur doit lever et reposer le doigt (nouveau `touchstart`). |
+| `touchstart` déclaré `{ passive: false }` | Obligatoire pour que `preventDefault()` dans `touchmove` soit respecté par le navigateur et bloque le scroll pendant le drag |
+| `e.preventDefault()` dans `touchmove` seulement si `isDragging` | Avant que le drag soit actif, ne pas bloquer le scroll natif |
 | Drop-center (sous-tâche) : vérifier `isDescendantOrSelf` | Interdire de dropper une tâche sur l'un de ses propres descendants |
