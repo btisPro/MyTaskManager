@@ -275,6 +275,7 @@ Trois comportements selon le timing d'appui :
 | 14.11 | Merge timestamps égaux | Si `updatedAt` identiques : fusion conservative — texte le plus long, notes non vides en priorité | `sync.js › mergeTasks` |
 | 14.12 | Merge enfants toujours récursif | Les `children` sont toujours mergés récursivement, même quand un côté gagne sur les champs scalaires | `sync.js › mergeTasks` |
 | 14.13 | Déplacement local respecté | Tâche présente dans `localAllIds` → pas réinsérée depuis distant (elle est à son nouvel emplacement local) | `sync.js › mergeTasks` |
+| 14.13b | Ordre last-write-wins | L'ordre des tâches dans la liste suit le côté dont le `updatedAt` MAX est le plus grand. Si distant ≥ local → ordre distant (référence partagée). Si local > distant → ordre local (réordonnement local plus récent). Garantit que tous les appareils affichent le même ordre après sync mutuelle. | `sync.js › mergeTasks › remoteMax / localMax / useRemoteOrder` |
 | 14.14 | Déplacement hiérarchique distant | Si une tâche a changé de niveau côté distant ET distant plus récent → retirée de l'arbre local avant merge → replacée à sa position distante | `sync.js › syncBidirectional › buildParentMap / removeTaskFromTree` |
 | 14.15 | Suppression distante → corbeille locale | Tâches dans la corbeille distante sont ajoutées à `deletedIds` → exclues de l'arbre mergé et intégrées à la corbeille locale | `sync.js › syncBidirectional` |
 | 14.16 | Merge purgedIds anticipé | Les `purgedIds` distants intégrés **avant** le merge → suppressions définitives distantes respectées immédiatement | `sync.js › syncBidirectional` |
@@ -347,6 +348,7 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `remotePurgedRaw` intégré **avant** le merge | Sans ça, une tâche supprimée définitivement sur l'autre appareil est réintégrée dans l'arbre local au merge |
 | `syncBidirectional` lit le Gist **avant** de sauvegarder | Garantit que les modifications des autres appareils sont prises en compte avant le push |
 | `remTrash` dans `deletedIds` **avant** le merge | Sans ça, une tâche supprimée sur l'autre appareil reste dans l'arbre local (la corbeille distante était mergée mais les tâches n'étaient pas retirées de l'arbre) |
+| Ordre basé sur `updatedAt` MAX, pas priorité locale absolue | Avant : les tâches locales étaient TOUJOURS avant les distantes → les nouveautés distantes s'affichaient en bas. Maintenant : ordre du côté le plus récent → même position sur tous les appareils après sync |
 | `buildParentMap` + `removeTaskFromTree` avant le merge | Sans ça, un déplacement hiérarchique distant est ignoré : la tâche reste à sa position locale même si le distant est plus récent |
 | `result.trash` passé à `onSyncUpdate` au démarrage | Sans ça, la corbeille distante n'était pas chargée en mémoire au démarrage (mergedTrash ignoré) |
 | `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |

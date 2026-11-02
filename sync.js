@@ -152,32 +152,36 @@ function removeTaskFromTree(tasks, taskId) {
 /**
  * Fusionne deux arbres de tâches.
  *
- * Stratégie détaillée :
- *
+ * ── Stratégie pour les données (text, notes, clicks) ────────────────────────
  *  CAS 1 — Tâche présente des deux côtés :
- *    • last-write-wins sur les champs scalaires (text, notes, clicks) :
- *      celui dont `updatedAt` est le plus grand gagne.
- *    • En cas d'égalité stricte de `updatedAt` (ex : données sans timestamp
- *      migrées simultanément), on fusionne les champs non vides :
- *      la version distante peut avoir des notes plus récentes même avec
- *      le même timestamp — on préfère le texte le plus long des deux.
- *    • Les enfants sont toujours mergés récursivement (union des deux côtés).
+ *    • last-write-wins : la version avec le plus grand `updatedAt` gagne.
+ *    • Égalité de timestamps : fusion conservative (texte le plus long,
+ *      notes non vides prioritaires).
+ *    • Les enfants sont TOUJOURS mergés récursivement.
  *
- *  CAS 2 — Tâche uniquement en local :
- *    → Conservée (ajout local ou déplacement depuis le distant).
+ *  CAS 2 — Tâche uniquement en local  → conservée.
+ *  CAS 3 — Tâche uniquement en distant :
+ *    → Ignorée si déjà présente dans l'arbre local (= déplacement local).
+ *    → Intégrée sinon (créée sur un autre appareil).
  *
- *  CAS 3 — Tâche uniquement côté distant :
- *    → Ignorée si elle est déjà présente dans l'arbre local
- *      (= déplacement local en attente).
- *    → Conservée sinon (= créée sur un autre appareil, à intégrer).
+ * ── Stratégie pour l'ORDRE (position dans la liste) ─────────────────────────
+ *  L'ordre est déterminé par le côté dont le `updatedAt` moyen est le plus
+ *  récent (= celui qui a réordonnné en dernier) :
  *
- *  ORDRE : ordre local en priorité (respecte les réordonnements faits ici),
- *    puis ordre distant pour les tâches purement distantes.
+ *  • Si la liste DISTANTE est plus récente ou égale → on suit l'ordre DISTANT.
+ *    Cela garantit que tous les appareils affichent le même ordre après sync,
+ *    le Gist étant la source d'ordre partagée.
+ *
+ *  • Si la liste LOCALE est plus récente → on suit l'ordre LOCAL.
+ *    Cela préserve un réordonnement que l'utilisateur vient de faire ici.
+ *
+ *  Dans les deux cas, les tâches présentes d'un seul côté sont intercalées
+ *  à leur position relative dans la liste qui les contient.
  *
  * @param {Task[]} local       - Tâches locales à ce niveau
  * @param {Task[]} remote      - Tâches distantes à ce niveau
- * @param {Set}    deletedIds  - Ids en corbeille locale (à exclure du merge)
- * @param {Set}    localAllIds - Tous les ids présents dans l'arbre local complet
+ * @param {Set}    deletedIds  - Ids à exclure du merge (corbeille + purgés)
+ * @param {Set}    localAllIds - Tous les ids de l'arbre local (pour détecter les déplacements)
  */
 function mergeTasks(local, remote, deletedIds = new Set(), localAllIds = new Set()) {
   const localMap  = new Map(local.map(t => [t.id, t]));
@@ -185,29 +189,25 @@ function mergeTasks(local, remote, deletedIds = new Set(), localAllIds = new Set
   const allIds    = new Set([...localMap.keys(), ...remoteMap.keys()]);
   const merged    = [];
 
+  // ── Données : fusion scalaire ─────────────────────────────────────────────
   for (const id of allIds) {
-    // Tâche purgée (supprimée définitivement) → ignorée dans toutes les listes
-    if (deletedIds.has(id)) continue;
+    if (deletedIds.has(id)) continue; // purgé / en corbeille → exclu
 
     const l = localMap.get(id);
     const r = remoteMap.get(id);
 
     if (l && r) {
-      // ── CAS 1 : présente des deux côtés ──────────────────────────────────
+      // CAS 1 : présente des deux côtés — last-write-wins sur les champs
       const lTs = l.updatedAt || 0;
       const rTs = r.updatedAt || 0;
 
       let winner;
       if (lTs > rTs) {
-        // Local plus récent : on prend les champs locaux
-        winner = l;
+        winner = l; // local plus récent
       } else if (rTs > lTs) {
-        // Distant plus récent : on prend les champs distants
-        winner = r;
+        winner = r; // distant plus récent
       } else {
-        // Timestamps identiques (données sans updatedAt migrées simultanément) :
-        // on tente une fusion conservative — on garde le texte le plus long,
-        // et les notes non vides en priorité.
+        // Égalité : fusion conservative
         winner = {
           ...l,
           text:  (r.text  && r.text.length  > (l.text  || '').length)  ? r.text  : (l.text  || r.text),
@@ -217,26 +217,21 @@ function mergeTasks(local, remote, deletedIds = new Set(), localAllIds = new Set
 
       merged.push({
         ...winner,
-        // Les enfants sont toujours mergés récursivement, quel que soit le gagnant
         children: mergeTasks(l.children || [], r.children || [], deletedIds, localAllIds),
       });
 
     } else if (l) {
-      // ── CAS 2 : uniquement en local ──────────────────────────────────────
-      // Peut être un ajout local récent ou un déplacement depuis un autre niveau.
+      // CAS 2 : uniquement en local
       merged.push({
         ...l,
         children: mergeTasks(l.children || [], [], deletedIds, localAllIds),
       });
 
     } else {
-      // ── CAS 3 : uniquement côté distant ──────────────────────────────────
-      // Si l'id est déjà présent dans l'arbre local (à un autre niveau),
-      // c'est un déplacement local : on l'ignore ici, il sera placé
-      // à son nouvel emplacement local.
+      // CAS 3 : uniquement en distant
+      // Si déjà présente ailleurs dans l'arbre local → déplacement local, on ignore
       if (localAllIds.has(id)) continue;
-
-      // Sinon c'est une nouveauté créée sur un autre appareil → on l'intègre.
+      // Sinon : créée sur un autre appareil → on l'intègre
       merged.push({
         ...r,
         children: mergeTasks([], r.children || [], deletedIds, localAllIds),
@@ -244,18 +239,66 @@ function mergeTasks(local, remote, deletedIds = new Set(), localAllIds = new Set
     }
   }
 
-  // ── Tri final : ordre local d'abord, ordre distant pour les tâches purement distantes ──
-  // Cette stratégie préserve les réordonnements faits localement (via clics, drag, ctx menu)
-  // et insère les nouveautés distantes à leur position distante relative.
-  const localOrder  = local.map(t => t.id);
-  const remoteOrder = remote.map(t => t.id);
+  // ── Ordre : qui a réordonné en dernier ? ─────────────────────────────────
+  //
+  // On compare le `updatedAt` MAX de chaque liste pour savoir quel côté
+  // a fait le dernier réordonnement. Le max est un bon proxy : si l'utilisateur
+  // a glissé une tâche sur cet appareil, sa tâche a reçu un updatedAt récent,
+  // qui sera le max local. Si l'autre appareil a réordonné, son max sera plus grand.
+  //
+  // Règle : distant >= local → ordre distant (source partagée de référence)
+  //         local > distant  → ordre local (réordonnement local plus récent)
+  //
+  // Cette règle garantit que deux appareils affichent le même ordre après une
+  // sync mutuelle, car ils appliquent tous deux "ordre du plus récent".
+  const localMax  = local.reduce( (m, t) => Math.max(m, t.updatedAt || 0), 0);
+  const remoteMax = remote.reduce((m, t) => Math.max(m, t.updatedAt || 0), 0);
+  const useRemoteOrder = remoteMax >= localMax; // distant gagne en cas d'égalité
+
+  const referenceOrder = useRemoteOrder ? remote : local;
+  const refIds         = referenceOrder.map(t => t.id);
+
+  // Les tâches absentes de la liste de référence (ajouts de l'autre côté)
+  // sont insérées à leur position relative dans l'autre liste.
+  const otherOrder = useRemoteOrder ? local : remote;
+  const otherIds   = otherOrder.map(t => t.id);
+
   merged.sort((a, b) => {
-    const ai = localOrder.indexOf(a.id);
-    const bi = localOrder.indexOf(b.id);
-    if (ai !== -1 && bi !== -1) return ai - bi;  // les deux sont locaux : ordre local
-    if (ai !== -1) return -1;                      // a est local, b est distant → a avant
-    if (bi !== -1) return 1;                       // b est local, a est distant → b avant
-    return remoteOrder.indexOf(a.id) - remoteOrder.indexOf(b.id); // les deux sont distants
+    const ai = refIds.indexOf(a.id);
+    const bi = refIds.indexOf(b.id);
+
+    if (ai !== -1 && bi !== -1) {
+      // Les deux sont dans la liste de référence → ordre de référence
+      return ai - bi;
+    }
+    if (ai !== -1 && bi === -1) {
+      // a est dans la référence, b est un ajout de l'autre côté :
+      // on insère b à sa position relative dans l'autre liste, entre
+      // les tâches de référence qui l'entourent.
+      const bi2 = otherIds.indexOf(b.id);
+      // Cherche le voisin de b dans otherOrder qui est aussi dans refIds
+      // pour déterminer avant/après quel élément de référence insérer b.
+      let refNeighbor = -1;
+      for (let i = bi2 - 1; i >= 0; i--) {
+        const ni = refIds.indexOf(otherIds[i]);
+        if (ni !== -1) { refNeighbor = ni; break; }
+      }
+      // b va après son dernier voisin de référence (ou en tête si aucun)
+      return ai - (refNeighbor + 0.5);
+    }
+    if (ai === -1 && bi !== -1) {
+      // Symétrique
+      const ai2 = otherIds.indexOf(a.id);
+      let refNeighbor = -1;
+      for (let i = ai2 - 1; i >= 0; i--) {
+        const ni = refIds.indexOf(otherIds[i]);
+        if (ni !== -1) { refNeighbor = ni; break; }
+      }
+      return (refNeighbor + 0.5) - bi;
+    }
+    // Les deux sont absents de la référence (ajouts des deux côtés) :
+    // on les intercale dans l'ordre de leur propre liste d'origine.
+    return otherIds.indexOf(a.id) - otherIds.indexOf(b.id);
   });
 
   return merged;
