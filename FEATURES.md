@@ -155,6 +155,9 @@ Trois comportements selon le timing d'appui :
 | 9.1b.7 | Drop au relâchement | `touchend` identifie la tâche cible sous le doigt et applique le déplacement | `app.js › initTouchDrag › touchend` |
 | 9.1b.8 | Annulation propre | `touchcancel` (appel entrant, etc.) → nettoyage sans appliquer de déplacement | `app.js › initTouchDrag › touchcancel` |
 | 9.1b.9 | `touchstart` non-passif | Déclaré `{ passive: false }` pour autoriser `preventDefault()` dans `touchmove` | `app.js › initTouchDrag` |
+| 9.1b.10 | Handlers sur `document` | `touchmove`/`touchend`/`touchcancel` enregistrés sur `document` (pas `containerEl`) et retirés après chaque cycle. Survie au `touchcancel` iOS causé par l'affichage du menu. | `app.js › initTouchDrag › onDocTouchMove/End/Cancel` |
+| 9.1b.11 | `activeTouchId` | Identifiant du toucher actif mémorisé pour filtrer le multi-touch | `app.js › initTouchDrag › activeTouchId` |
+| 9.1b.12 | `touchcancel` ignoré si `menuShown` | iOS émet `touchcancel` quand le DOM change (menu apparu). Si `menuShown = true`, le cancel est ignoré — le suivi du doigt continue via `onDocTouchMove` | `app.js › initTouchDrag › onDocTouchCancel` |
 
 ### 9.2 Drag vers l'arbre (déplacement entre niveaux)
 
@@ -353,9 +356,12 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `result.trash` passé à `onSyncUpdate` au démarrage | Sans ça, la corbeille distante n'était pas chargée en mémoire au démarrage (mergedTrash ignoré) |
 | `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |
 | `dragReadyTimer` (200 ms) avant tout drag | Si le doigt bouge avant 200 ms → `cleanupTouch()` immédiat, scroll natif, pas de drag |
-| `menuShown` flag dans `initTouchDrag` | Indique que le menu est affiché dans ce cycle. Si le doigt bouge ensuite, `touchmove` ferme le menu et démarre le drag sans nouveau `touchstart`. |
-| `startDrag()` factorisée | Factorisée pour être appelée depuis deux endroits : mouvement normal (200–500 ms) et mouvement après menu. |
-| Recalibrage de `startX/startY` après fermeture du menu | Évite que la distance accumulée depuis le touchstart initial décale le ghost — on repart de la position courante du doigt. |
+| `menuShown` flag dans `initTouchDrag` | Indique que le menu est affiché dans ce cycle. Si le doigt bouge ensuite, `onDocTouchMove` ferme le menu et démarre le drag sans nouveau `touchstart`. |
+| `startDrag()` factorisée | Appelée depuis deux chemins : mouvement 200–500 ms et mouvement après menu. |
+| Recalibrage de `startX/startY` après fermeture du menu | Évite que la distance accumulée depuis le touchstart décale le ghost. |
+| Handlers `touchmove/end/cancel` sur `document` | iOS Safari émet `touchcancel` quand le DOM change (menu affiché). Les handlers sur `containerEl` cessent de recevoir les events après ce cancel. Sur `document`, ils survivent. |
+| `touchcancel` ignoré si `menuShown = true` | Le cancel iOS est causé par le menu — on ne réinitialise pas l'état, le drag reste possible si le doigt bouge ensuite. |
+| `activeTouchId` pour filtrer le multi-touch | Seul le doigt qui a initié le geste (même `identifier`) est suivi dans `onDocTouchMove/End`. |
 | `touchstart` déclaré `{ passive: false }` | Obligatoire pour que `preventDefault()` dans `touchmove` soit respecté par le navigateur et bloque le scroll pendant le drag |
 | `e.preventDefault()` dans `touchmove` seulement si `isDragging` | Avant que le drag soit actif, ne pas bloquer le scroll natif |
 | Drop-center (sous-tâche) : vérifier `isDescendantOrSelf` | Interdire de dropper une tâche sur l'un de ses propres descendants |

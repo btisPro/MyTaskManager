@@ -2029,26 +2029,27 @@ function findTaskById(list, id) {
    On implémente un système complet via les Touch Events :
 
    Architecture des gestes tactiles — trois comportements selon le timing :
- 
-   1. Doigt bouge avant 200 ms        → scroll natif (ni drag, ni menu)
+
+   1. Doigt bouge avant 200 ms           → scroll natif (ni drag, ni menu)
    2. Doigt bouge entre 200 ms et 500 ms → drag tactile (annule le long press)
-   3. Doigt immobile ≥ 500 ms         → menu contextuel affiché
+   3. Doigt immobile ≥ 500 ms            → menu contextuel affiché
       └→ Si le doigt bouge ensuite (sans lâcher) :
            menu fermé + drag tactile démarré immédiatement
       └→ Si le doigt est levé après le menu :
-           menu reste visible, fin du cycle (le menu se ferme par tap ailleurs)
- 
-   Pourquoi on peut enchaîner menu puis drag dans le même cycle ?
-   Le `touchstart` est déclaré `{ passive: false }`, ce qui permet à
-   `touchmove` d'appeler `preventDefault()` pour bloquer le scroll natif.
-   Quand le menu est affiché et que le doigt bouge, `touchmove` détecte
-   le mouvement, ferme le menu via `hideContextMenu()` et démarre le drag
-   directement — sans lever le doigt.
-   La variable `menuShown` distingue "menu visible = drag possible si mouvement"
-   de "drag déjà en cours".
- 
-   Le système est initialisé une seule fois par conteneur (event delegation),
-   robuste aux re-renders de renderList().
+           menu reste visible, fin du cycle
+
+   Problème iOS Safari : quand le menu s'affiche (DOM change pendant un touch),
+   le navigateur émet un `touchcancel` automatique. Cela coupe le suivi du doigt
+   si les handlers touchmove/touchend sont sur containerEl.
+
+   Solution : les handlers touchmove et touchend sont attachés à `document`
+   (pas à containerEl) et retirés après chaque cycle touch. Ainsi le suivi du
+   doigt survive au touchcancel iOS. Le touchcancel lui-même ne réinitialise
+   l'état que si le menu n'est PAS affiché (sinon c'est lui qui l'a causé).
+
+   Le touchstart reste sur containerEl (event delegation, une seule fois) pour
+   identifier la tâche source. Les handlers document sont ajoutés/retirés
+   dynamiquement à chaque cycle touch pour ne pas polluer les autres touches.
 ════════════════════════════════════════════════════════════ */
 
 /**
@@ -2060,27 +2061,24 @@ function findTaskById(list, id) {
  */
 function initTouchDrag(containerEl, getTasksFn) {
   const LONG_PRESS_DELAY = 500;  // ms immobile → ouvre le menu contextuel
-  const DRAG_READY_DELAY = 200;  // ms immobile minimum avant qu'un mouvement puisse démarrer le drag
-  const MOVE_THRESHOLD   = 10;   // px de mouvement minimum pour démarrer le drag (après DRAG_READY_DELAY)
+  const DRAG_READY_DELAY = 200;  // ms immobile minimum avant qu'un drag soit possible
+  const MOVE_THRESHOLD   = 10;   // px de mouvement minimum pour déclencher le drag
 
   // ── État du geste en cours ────────────────────────────────
-  let longPressTimer = null;   // timer long press (500 ms) → menu contextuel
-  let dragReadyTimer = null;   // timer minimum avant drag (200 ms)
-  let dragReady      = false;  // true après DRAG_READY_DELAY ms d'appui immobile
-  let touchSrcTask   = null;   // tâche source identifiée au touchstart
-  let touchSrcList   = null;   // tableau de tâches source
-  let touchGhost     = null;   // élément DOM semi-transparent qui suit le doigt
-  let isDragging     = false;  // true une fois le drag effectivement démarré
-  let menuShown      = false;  // true si le menu contextuel a été affiché dans ce cycle
-                               // → le prochain mouvement du doigt ferme le menu et démarre le drag
-  let startX = 0, startY = 0; // position du doigt au touchstart (ou au moment où le menu s'est affiché)
+  let longPressTimer = null;   // timer long press (500 ms)
+  let dragReadyTimer = null;   // timer délai minimum avant drag (200 ms)
+  let dragReady      = false;  // true après DRAG_READY_DELAY ms immobile
+  let touchSrcTask   = null;   // tâche source (identifiée au touchstart)
+  let touchSrcList   = null;   // tableau de tâches contenant la source
+  let touchGhost     = null;   // clone DOM semi-transparent qui suit le doigt
+  let isDragging     = false;  // true une fois le drag démarré
+  let menuShown      = false;  // true si le menu contextuel est visible dans ce cycle
+  let activeTouchId  = null;   // identifiant du toucher actif (pour filtrer les multi-touch)
+  let startX = 0, startY = 0; // position du doigt au début du cycle (touchstart ou recalibrage)
 
-  // ── Helpers internes ──────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────
 
-  /**
-   * Trouve le <li class="task-item"> sous les coordonnées (x, y).
-   * On cache temporairement le ghost pour ne pas le cibler avec elementFromPoint.
-   */
+  /** Trouve le <li class="task-item"> sous (x, y), en ignorant le ghost. */
   function getTaskItemAt(x, y) {
     if (touchGhost) touchGhost.style.display = 'none';
     const el = document.elementFromPoint(x, y);
@@ -2088,10 +2086,7 @@ function initTouchDrag(containerEl, getTasksFn) {
     return el ? el.closest('.task-item') : null;
   }
 
-  /**
-   * Crée et attache au DOM le ghost visuel qui suit le doigt pendant le drag.
-   * Le ghost est un clone du <li> source, positionné en fixed et semi-transparent.
-   */
+  /** Crée le ghost visuel (clone du <li> source, positionné en fixed). */
   function createTouchGhost(li) {
     const rect = li.getBoundingClientRect();
     touchGhost = li.cloneNode(true);
@@ -2102,7 +2097,7 @@ function initTouchDrag(containerEl, getTasksFn) {
       top:           rect.top  + 'px',
       width:         rect.width + 'px',
       opacity:       '0.75',
-      pointerEvents: 'none',      // le ghost ne capte pas les events pointeur
+      pointerEvents: 'none',
       zIndex:        '9999',
       background:    '#eef2ff',
       border:        '2px solid #4f46e5',
@@ -2114,36 +2109,33 @@ function initTouchDrag(containerEl, getTasksFn) {
     document.body.appendChild(touchGhost);
   }
 
-  /**
-   * Déplace le ghost pour qu'il suive le doigt, centré horizontalement
-   * et légèrement au-dessus du point de contact (offset -20 px vertical).
-   */
+  /** Déplace le ghost pour qu'il suive le doigt (centré, -20 px vertical). */
   function moveTouchGhost(x, y) {
     if (!touchGhost) return;
-    const rect = touchGhost.getBoundingClientRect();
-    touchGhost.style.left = (x - rect.width / 2) + 'px';
+    const w = touchGhost.offsetWidth;
+    touchGhost.style.left = (x - w / 2) + 'px';
     touchGhost.style.top  = (y - 20) + 'px';
   }
 
   /**
-   * Démarre le drag tactile : crée le ghost, marque la source, active dragging-active.
-   * Factorisé car appelé depuis deux endroits (mouvement normal et mouvement après menu).
+   * Démarre le drag : ghost, classe touch-src sur la source, état dragging-active.
+   * Factorisé car appelé depuis deux chemins : mouvement normal (200–500 ms)
+   * et mouvement après affichage du menu (sans lever le doigt).
    */
-  function startDrag(touch) {
+  function startDrag() {
     isDragging = true;
     document.body.classList.add('dragging-active');
-    if (navigator.vibrate) navigator.vibrate(20); // feedback haptique court
+    if (navigator.vibrate) navigator.vibrate(20);
     const srcLi = containerEl.querySelector(`[data-task-id="${touchSrcTask.id}"]`);
     if (srcLi) {
-      srcLi.classList.add('touch-src'); // rend la source semi-transparente
+      srcLi.classList.add('touch-src');
       createTouchGhost(srcLi);
     }
   }
 
   /**
-   * Nettoyage complet de l'état tactile : supprime le ghost, retire les classes
-   * de drop feedback, et remet toutes les variables à leur valeur initiale.
-   * Appelé au touchend, touchcancel, ou si le geste est annulé (scroll).
+   * Nettoyage complet : ghost, classes drop, timers, état, et surtout
+   * désinscription des handlers document (touchmove/touchend/touchcancel).
    */
   function cleanupTouch() {
     if (touchGhost) { touchGhost.remove(); touchGhost = null; }
@@ -2155,28 +2147,183 @@ function initTouchDrag(containerEl, getTasksFn) {
     longPressTimer = null;
     dragReadyTimer = null;
     dragReady      = false;
-    touchSrcTask   = null;
-    touchSrcList   = null;
     isDragging     = false;
     menuShown      = false;
+    touchSrcTask   = null;
+    touchSrcList   = null;
+    activeTouchId  = null;
+    // Retire les listeners document enregistrés pour ce cycle
+    document.removeEventListener('touchmove',   onDocTouchMove);
+    document.removeEventListener('touchend',    onDocTouchEnd);
+    document.removeEventListener('touchcancel', onDocTouchCancel);
   }
 
-  // ── touchstart ────────────────────────────────────────────
-  // { passive: false } est OBLIGATOIRE ici : cela permet à touchmove d'appeler
-  // preventDefault() pour bloquer le scroll natif pendant un drag actif.
-  // Sans ça, le navigateur ignore le preventDefault() dans touchmove.
+  /**
+   * Applique le déplacement (réordonnement ou mise en sous-tâche) au touchend.
+   * Appelé depuis onDocTouchEnd après vérification que isDragging est true.
+   */
+  function applyDrop(x, y) {
+    const targetLi = getTaskItemAt(x, y);
+    if (!targetLi || targetLi.dataset.taskId === String(touchSrcTask.id)) return;
+
+    const destId  = parseInt(targetLi.dataset.taskId);
+    const tasks   = getTasksFn();
+    const srcId   = touchSrcTask.id;
+    const srcIdx  = tasks.findIndex(t => t.id === srcId);
+    let   destIdx = tasks.findIndex(t => t.id === destId);
+    if (srcIdx === -1 || destIdx === -1) return;
+
+    const isChild  = targetLi.classList.contains('drop-child');
+    const isBefore = targetLi.classList.contains('drop-before');
+
+    if (isChild) {
+      // ── Drop centre : la tâche source devient sous-tâche de la cible ───
+      // Vérifie qu'on ne crée pas un cycle (pas de drop sur un descendant de soi-même)
+      if (isDescendantOrSelf(destId, srcId, rootTasks)) return;
+      const destTask = tasks[destIdx];
+      const [moved]  = tasks.splice(srcIdx, 1);
+      destTask.children.unshift(moved);
+      treeCollapsed[destId] = false; // déplie la cible pour révéler le nouvel enfant
+      localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
+      // Marque les deux tâches pour que la sync préserve le déplacement hiérarchique
+      touchUpdatedAt(moved.id);
+      touchUpdatedAt(destTask.id);
+    } else {
+      // ── Drop haut/bas : réordonnement dans la même liste ────────────────
+      const [moved] = tasks.splice(srcIdx, 1);
+      destIdx = tasks.findIndex(t => t.id === destId); // recalcule après le splice
+      const insertIdx = isBefore ? destIdx : destIdx + 1;
+      tasks.splice(insertIdx, 0, moved);
+      // Marque la tâche pour que la sync préserve le nouvel ordre
+      touchUpdatedAt(moved.id);
+    }
+
+    saveTasks();
+    renderList(containerEl, tasks);
+    renderTree();
+  }
+
+  // ── Handlers document (enregistrés dynamiquement à chaque touchstart) ────
+  //
+  // POURQUOI sur document et non containerEl ?
+  // iOS Safari émet un `touchcancel` automatique quand le DOM change pendant
+  // un touch (ex: affichage du menu). Si les handlers sont sur containerEl,
+  // ils cessent de recevoir les événements après ce touchcancel.
+  // En les attachant à document et en les retirant proprement au cleanupTouch,
+  // on garantit que le suivi du doigt survive à l'apparition du menu.
+
+  function onDocTouchMove(e) {
+    // Filtre les multi-touch : on ne suit que le doigt qui a initié le geste
+    const touch = Array.from(e.changedTouches).find(t => t.identifier === activeTouchId);
+    if (!touch || !touchSrcTask) return;
+
+    const dx   = touch.clientX - startX;
+    const dy   = touch.clientY - startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (!isDragging) {
+      if (menuShown) {
+        // ── Le menu est affiché et le doigt bouge ─────────────────────
+        // On ferme le menu et on démarre le drag immédiatement.
+        // Seuil minimal pour éviter un drag accidentel dû aux micro-vibrations.
+        if (dist < MOVE_THRESHOLD) {
+          e.preventDefault(); // bloque le scroll pendant qu'on attend
+          return;
+        }
+        hideContextMenu();
+        menuShown = false;
+        // Recalibrage : on repart de la position courante pour que le ghost
+        // apparaisse au bon endroit dès le premier frame de drag.
+        startX = touch.clientX;
+        startY = touch.clientY;
+        startDrag();
+
+      } else if (!dragReady) {
+        // ── Avant 200 ms : scroll natif ───────────────────────────────
+        // L'utilisateur scrolle, on abandonne le cycle.
+        cleanupTouch();
+        return;
+
+      } else if (dist < MOVE_THRESHOLD) {
+        // ── Délai ok, pas encore assez bougé → on attend ──────────────
+        return;
+
+      } else {
+        // ── Délai ok + assez bougé → démarre le drag ──────────────────
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+        startDrag();
+      }
+    }
+
+    // ── Drag actif : mise à jour du ghost et de la cible ──────────────
+    e.preventDefault(); // bloque le scroll (possible car touchstart est non-passive)
+    moveTouchGhost(touch.clientX, touch.clientY);
+
+    // Efface le feedback précédent et recalcule la zone de drop
+    containerEl.querySelectorAll('.task-item').forEach(el =>
+      el.classList.remove('drop-before', 'drop-after', 'drop-child'));
+
+    // Division du <li> cible en 3 tiers (haut / centre / bas) :
+    //   haut   → drop-before (insérer avant)
+    //   centre → drop-child  (devenir sous-tâche)
+    //   bas    → drop-after  (insérer après)
+    const targetLi = getTaskItemAt(touch.clientX, touch.clientY);
+    if (targetLi && targetLi.dataset.taskId !== String(touchSrcTask.id)) {
+      const rect  = targetLi.getBoundingClientRect();
+      const relY  = touch.clientY - rect.top;
+      const third = rect.height / 3;
+      if      (relY < third)     targetLi.classList.add('drop-before');
+      else if (relY > third * 2) targetLi.classList.add('drop-after');
+      else                       targetLi.classList.add('drop-child');
+    }
+  }
+
+  function onDocTouchEnd(e) {
+    const touch = Array.from(e.changedTouches).find(t => t.identifier === activeTouchId);
+    if (!touch) return;
+
+    clearTimeout(longPressTimer);
+    clearTimeout(dragReadyTimer);
+
+    if (isDragging) {
+      // Applique le déplacement au point de relâchement
+      applyDrop(touch.clientX, touch.clientY);
+    }
+    // Si menuShown && !isDragging : le doigt est levé sans avoir bougé après le menu
+    // → le menu reste visible, il se fermera par tap ailleurs. Rien à faire.
+
+    cleanupTouch();
+  }
+
+  function onDocTouchCancel(e) {
+    // iOS Safari émet touchcancel quand le DOM change (affichage du menu).
+    // Dans ce cas, menuShown est true → on NE nettoie PAS l'état car on veut
+    // continuer à suivre le doigt dans onDocTouchMove (qui continue de recevoir
+    // les événements puisqu'il est sur document).
+    // Pour tout autre cancel (appel entrant, etc.) → nettoyage complet.
+    if (menuShown) return;
+    cleanupTouch();
+  }
+
+  // ── touchstart sur containerEl ────────────────────────────
+  // { passive: false } OBLIGATOIRE : autorise preventDefault() dans touchmove
+  // pour bloquer le scroll natif pendant le drag.
   containerEl.addEventListener('touchstart', (e) => {
-    // Cible uniquement les <li class="task-item"> (ou leurs enfants)
+    // Cible uniquement un .task-item (ou ses enfants)
     const li = e.target.closest('.task-item');
     if (!li) return;
 
-    // Laisse passer les touches sur les boutons interactifs
+    // Ignore les boutons interactifs
     if (e.target.closest('button, a, input, .task-detail-btn, .task-delete')) return;
 
-    // Réinitialise l'état pour ce nouveau cycle touch
-    cleanupTouch();
+    // Un seul toucher actif à la fois (ignore le multi-touch)
+    if (activeTouchId !== null) return;
+
+    cleanupTouch(); // réinitialise l'état du cycle précédent
 
     const touch = e.touches[0];
+    activeTouchId = touch.identifier; // mémorise l'id pour filtrer le multi-touch
     startX = touch.clientX;
     startY = touch.clientY;
 
@@ -2184,194 +2331,43 @@ function initTouchDrag(containerEl, getTasksFn) {
     const tasks  = getTasksFn();
     touchSrcTask = tasks.find(t => t.id === taskId) || null;
     touchSrcList = tasks;
+    if (!touchSrcTask) { activeTouchId = null; return; }
 
-    if (!touchSrcTask) return;
+    // Enregistre les handlers sur document pour ce cycle.
+    // Ils seront retirés par cleanupTouch() à la fin du cycle.
+    // { passive: false } sur touchmove pour pouvoir appeler preventDefault().
+    document.addEventListener('touchmove',   onDocTouchMove,   { passive: false });
+    document.addEventListener('touchend',    onDocTouchEnd,    { passive: true  });
+    document.addEventListener('touchcancel', onDocTouchCancel, { passive: true  });
 
-    // Timer 1 (200 ms) : à partir de cet instant le drag est autorisé si le doigt bouge
+    // Timer 1 (200 ms) : autorise le drag à partir de ce moment
     dragReadyTimer = setTimeout(() => {
       dragReadyTimer = null;
       dragReady = true;
     }, DRAG_READY_DELAY);
 
-    // Timer 2 (500 ms) : long press → ouvre le menu contextuel
+    // Timer 2 (500 ms) : long press → affiche le menu contextuel
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
+      if (isDragging) return; // drag déjà en cours → pas de menu
 
-      // Si un drag est déjà en cours, on n'affiche pas le menu
-      if (isDragging) return;
+      if (navigator.vibrate) navigator.vibrate(40); // feedback haptique long
 
-      // Feedback haptique long (40 ms) pour signaler le long press
-      if (navigator.vibrate) navigator.vibrate(40);
-
-      // On note que le menu est affiché dans ce cycle.
-      // Si le doigt bouge ensuite (sans lâcher), touchmove fermera le menu
-      // et démarrera le drag immédiatement — sans nouveau touchstart.
+      // menuShown = true permet à onDocTouchMove de détecter le prochain
+      // mouvement du doigt et de fermer le menu pour démarrer le drag.
+      // Le touchcancel éventuel (iOS) sera ignoré grâce à ce flag.
       menuShown = true;
       clearTimeout(dragReadyTimer);
       dragReadyTimer = null;
+      dragReady = true; // le délai 200 ms est dépassé, le drag est autorisé
 
-      // Affiche le menu contextuel positionné au niveau du doigt
-      const fakeEvent = {
-        preventDefault:  () => {},
-        stopPropagation: () => {},
-        clientX: startX,
-        clientY: startY,
-      };
-      showContextMenu(fakeEvent, touchSrcTask, touchSrcList, containerEl);
-
+      showContextMenu(
+        { preventDefault: ()=>{}, stopPropagation: ()=>{}, clientX: startX, clientY: startY },
+        touchSrcTask, touchSrcList, containerEl
+      );
     }, LONG_PRESS_DELAY);
 
   }, { passive: false });
-
-  // ── touchmove ─────────────────────────────────────────────
-  // { passive: false } pour pouvoir appeler preventDefault() pendant le drag.
-  containerEl.addEventListener('touchmove', (e) => {
-    if (!touchSrcTask) return;
-
-    const touch = e.touches[0];
-    const dx    = touch.clientX - startX;
-    const dy    = touch.clientY - startY;
-    const dist  = Math.sqrt(dx * dx + dy * dy);
-
-    if (!isDragging) {
-      // ── Cas 1 : le menu est affiché et le doigt bouge ────────────
-      // On ferme le menu et on démarre le drag immédiatement (sans lever le doigt).
-      // Le seuil de distance est volontairement faible (MOVE_THRESHOLD) pour
-      // que le geste soit réactif dès que l'utilisateur commence à glisser.
-      if (menuShown) {
-        if (dist < MOVE_THRESHOLD) {
-          // Pas encore assez bougé : on bloque le scroll mais on attend
-          e.preventDefault();
-          return;
-        }
-        // Assez bougé : on ferme le menu et on démarre le drag
-        hideContextMenu();
-        menuShown = false;
-        // On recalibre startX/startY à la position courante du doigt :
-        // cela évite que la distance accumulée depuis le touchstart initial
-        // décale artificiellement le ghost au prochain frame.
-        startX = touch.clientX;
-        startY = touch.clientY;
-        startDrag(touch);
-        // On laisse le reste du handler positionner le ghost et la cible
-      }
-
-      // ── Cas 2 : phase de décision normale (sans menu) ────────────
-      else if (!dragReady) {
-        // Avant DRAG_READY_DELAY ms, tout mouvement = scroll natif
-        cleanupTouch();
-        return;
-      }
-      else if (dist < MOVE_THRESHOLD) {
-        // Délai ok mais pas encore assez bougé → on attend
-        return;
-      }
-      else {
-        // Délai ok + assez bougé → démarre le drag, annule le long press
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-        startDrag(touch);
-      }
-    }
-
-    // ── Drag actif : bloque le scroll et met à jour le ghost + feedback ──
-    // Possible car touchstart est { passive: false }
-    e.preventDefault();
-    moveTouchGhost(touch.clientX, touch.clientY);
-
-    // Efface les classes drop précédentes et calcule la nouvelle cible
-    containerEl.querySelectorAll('.task-item').forEach(el =>
-      el.classList.remove('drop-before', 'drop-after', 'drop-child'));
-
-    // La hauteur du <li> est divisée en 3 tiers :
-    //   tiers supérieur  → drop-before (insérer avant)
-    //   tiers central    → drop-child  (devenir sous-tâche)
-    //   tiers inférieur  → drop-after  (insérer après)
-    const targetLi = getTaskItemAt(touch.clientX, touch.clientY);
-    if (targetLi && targetLi.dataset.taskId !== String(touchSrcTask.id)) {
-      const rect  = targetLi.getBoundingClientRect();
-      const relY  = touch.clientY - rect.top;
-      const third = rect.height / 3;
-      if      (relY < third)      targetLi.classList.add('drop-before');
-      else if (relY > third * 2)  targetLi.classList.add('drop-after');
-      else                        targetLi.classList.add('drop-child');
-    }
-
-  }, { passive: false });
-
-  // ── touchend ──────────────────────────────────────────────
-  containerEl.addEventListener('touchend', (e) => {
-    clearTimeout(longPressTimer);
-    clearTimeout(dragReadyTimer);
-
-    // Le menu est affiché et le doigt est levé sans avoir bougé :
-    // le menu reste visible (il se fermera par tap ailleurs). On nettoie l'état drag.
-    if (menuShown && !isDragging) {
-      cleanupTouch();
-      return;
-    }
-
-    // Aucun drag en cours (simple tap ou scroll annulé) → nettoyage
-    if (!isDragging) {
-      cleanupTouch();
-      return;
-    }
-
-    // ── Fin du drag : applique le déplacement ─────────────────────
-    const touch    = e.changedTouches[0];
-    const targetLi = getTaskItemAt(touch.clientX, touch.clientY);
-
-    if (targetLi && targetLi.dataset.taskId !== String(touchSrcTask.id)) {
-      const destId  = parseInt(targetLi.dataset.taskId);
-      const tasks   = getTasksFn();
-      const srcId   = touchSrcTask.id;
-      const srcIdx  = tasks.findIndex(t => t.id === srcId);
-      let   destIdx = tasks.findIndex(t => t.id === destId);
-
-      if (srcIdx !== -1 && destIdx !== -1) {
-        const isChild  = targetLi.classList.contains('drop-child');
-        const isBefore = targetLi.classList.contains('drop-before');
-
-        if (isChild) {
-          // ── Drop centre : la tâche devient sous-tâche de la cible ────
-          // On vérifie qu'on ne crée pas un cycle (interdire de déposer
-          // un parent dans l'un de ses propres descendants).
-          if (!isDescendantOrSelf(destId, srcId, rootTasks)) {
-            const destTask = tasks[destIdx];
-            const [moved]  = tasks.splice(srcIdx, 1);
-            destTask.children.unshift(moved);
-            treeCollapsed[destId] = false; // déplie la cible pour révéler le nouvel enfant
-            localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
-            // Marque les deux tâches pour que la sync préserve le déplacement hiérarchique
-            touchUpdatedAt(moved.id);
-            touchUpdatedAt(destTask.id);
-            saveTasks();
-            renderList(containerEl, tasks);
-            renderTree();
-          }
-        } else {
-          // ── Drop haut/bas : réordonnement dans la même liste ─────────
-          const [moved] = tasks.splice(srcIdx, 1);
-          destIdx = tasks.findIndex(t => t.id === destId); // recalcule après splice
-          const insertIdx = isBefore ? destIdx : destIdx + 1;
-          tasks.splice(insertIdx, 0, moved);
-          // Marque la tâche pour que la sync préserve le nouvel ordre
-          touchUpdatedAt(moved.id);
-          saveTasks();
-          renderList(containerEl, tasks);
-          renderTree();
-        }
-      }
-    }
-
-    cleanupTouch();
-  }, { passive: true }); // touchend peut être passive (pas besoin de preventDefault ici)
-
-  // ── touchcancel ───────────────────────────────────────────
-  // Déclenché par le système (ex: appel entrant, notification) → nettoyage propre
-  containerEl.addEventListener('touchcancel', () => {
-    cleanupTouch();
-  }, { passive: true });
 }
 
 /* ═══════════════════════════════════════════════════════════
