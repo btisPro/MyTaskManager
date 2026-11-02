@@ -268,10 +268,10 @@ Trois comportements selon le timing d'appui :
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14.1 | Configuration | Token PAT + Gist ID saisis dans la modale sync, persistés dans localStorage | `sync.js › getSyncConfig / setSyncConfig` |
-| 14.2 | Sync bidirectionnelle | GET Gist → merge → save local → push Gist. Le Gist est **toujours lu en premier**. | `sync.js › syncBidirectional` |
+| 14.2 | Sync bidirectionnelle | GET Gist → merge → save local → push Gist. Le Gist est **toujours lu en premier**. Retourne `hasRemoteChanges` : true si le merge a intégré des données du Gist absentes en local. | `sync.js › syncBidirectional` |
 | 14.3 | Sync push forcée | Écrase le Gist avec les données locales (initialisation premier appareil) | `sync.js › syncPush` |
 | 14.4 | Sync pull forcée | Écrase le local avec les données Gist (initialisation nouvel appareil) | `sync.js › syncPull` |
-| 14.5 | Sync automatique | Déclenchée après chaque `saveTasks()` avec debounce 3 s | `sync.js › syncAuto` |
+| 14.5 | Sync automatique | Déclenchée après chaque `saveTasks()` avec debounce 3 s. Ne déclenche un re-render que si `hasRemoteChanges = true` (le Gist avait des données nouvelles), pour éviter le flash visuel. | `sync.js › syncAuto` |
 | 14.6 | Sync au démarrage | Si sync activée et online au chargement de la page — `mergedTrash` passé à `onSyncUpdate` | `app.js › init` |
 | 14.7 | Sync sur idle | Si utilisateur actif et dernière sync > 10 min → sync automatique | `sync.js › _startIdleSyncWatcher` |
 | 14.8 | `updatedAt` sur toutes les mutations | Chaque création/modification/déplacement pose `updatedAt = Date.now()` via `touchUpdatedAt()` ou `makeTask()` | `app.js › touchUpdatedAt / makeTask` |
@@ -348,6 +348,8 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `collectAllIds([e.task], deletedIds)` dans `syncBidirectional` | Inclut les descendants des tâches en corbeille dans les ids supprimés |
 | `localAllIds` dans `mergeTasks` | Sans ça, un déplacement local est interprété comme une nouvelle tâche distante |
 | `touchUpdatedAt(id)` après **chaque** mutation | Sans ça, le merge choisit arbitrairement entre local et distant car les `updatedAt` sont identiques |
+| `hasRemoteChanges` dans `syncBidirectional` | Comparaison JSON du résultat merged vs données locales avant sync. Si identique : `syncAuto` et le watcher idle n'appellent pas `onSyncUpdate` → pas de re-render → pas de flash visuel après modification locale |
+| Sync manuelle (clic statut, boutons modale) toujours re-rend | Même si `hasRemoteChanges = false`, une sync déclenchée manuellement re-rend toujours l'UI (l'utilisateur veut voir le résultat complet) |
 | `makeTask()` pose `updatedAt: now` | Une nouvelle tâche doit avoir un timestamp plus récent que toute version distante sans timestamp |
 | `ensureTimestamps` ne doit PAS écraser les `updatedAt` existants | Il ne pose que si absent — sinon il effacerait les timestamps des tâches récemment modifiées |
 | `remotePurgedRaw` intégré **avant** le merge | Sans ça, une tâche supprimée définitivement sur l'autre appareil est réintégrée dans l'arbre local au merge |

@@ -486,13 +486,38 @@ async function syncBidirectional() {
       .filter(e => !purgedIdsSet.has(e.task.id));   // exclut les purgés définitivement
 
     // ── 6. Persistence locale et push Gist ───────────────────────────────────
+
+    // Détermine si la sync a apporté des données EXTERNES (venant d'un autre appareil).
+    // Si le résultat du merge est identique à ce qu'on avait localement AVANT la sync,
+    // c'est que le Gist n'avait rien de nouveau : inutile de re-rendre l'UI.
+    //
+    // Cette comparaison est la clé pour éviter le "flash" visuel :
+    //   1. Utilisateur modifie une tâche → re-render immédiat (correct)
+    //   2. 3 s plus tard : sync auto → merge → résultat = données locales inchangées
+    //   3. Sans ce test, onSyncUpdate re-rendrait l'UI inutilement (causant le flash)
+    //   4. Avec ce test : hasRemoteChanges = false → pas de re-render → pas de flash
+    //
+    // On compare le JSON du résultat merged à celui des données locales lues en début
+    // de sync (localTasks). On utilise JSON.stringify comme hash rapide — suffisant car
+    // les deux tableaux sont issus de JSON.parse donc sans références circulaires.
+    const hasRemoteChanges = JSON.stringify(merged) !== JSON.stringify(localTasks)
+                          || JSON.stringify(mergedTrash) !== JSON.stringify(localTrash);
+
     localStorage.setItem('purgedIds', JSON.stringify(mergedPurged));
     localStorage.setItem('tasks',     JSON.stringify(merged));
     localStorage.setItem('trash',     JSON.stringify(mergedTrash));
     await gistPush(token, gistId, { tasks: merged, trash: mergedTrash, purgedIds: mergedPurged });
     localStorage.setItem(KEY_SYNC_LAST, new Date().toISOString());
     setSyncStatus('ok');
-    return { ok: true, message: 'Synchronisation réussie.', tasks: merged, trash: mergedTrash };
+    return {
+      ok: true,
+      message: 'Synchronisation réussie.',
+      tasks: merged,
+      trash: mergedTrash,
+      // hasRemoteChanges = true uniquement si le Gist avait des données nouvelles
+      // que le merge a intégrées. Quand false, l'appelant peut éviter un re-render.
+      hasRemoteChanges,
+    };
   } catch (err) {
     setSyncStatus('error');
     return { ok: false, message: `Erreur : ${err.message}` };
@@ -570,7 +595,11 @@ function syncAuto(onSuccess) {
   clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(async () => {
     const result = await syncBidirectional();
-    if (result.ok && result.tasks && onSuccess) {
+    // N'appelle onSuccess (= re-render UI) que si le Gist avait des données nouvelles.
+    // Si hasRemoteChanges = false, le merge n'a rien apporté d'externe : les données
+    // locales sont inchangées, l'UI est déjà correcte, un re-render serait inutile
+    // et provoquerait un flash visuel (l'ancienne valeur du Gist brièvement visible).
+    if (result.ok && result.tasks && result.hasRemoteChanges && onSuccess) {
       onSuccess(result.tasks, result.trash);
     }
   }, SYNC_DEBOUNCE);
@@ -712,7 +741,9 @@ function initSyncUI(onTasksUpdated) {
       logMsg('Synchronisation forcée (clic sur le statut)…');
       const result = await syncBidirectional();
       logMsg(result.message, result.ok ? 'ok' : 'error');
-      if (result.ok && result.tasks) onTasksUpdated(result.tasks);
+      // Pour une sync manuelle (clic sur le statut), on re-rend toujours :
+      // l'utilisateur veut voir le résultat complet, même s'il n'y a rien de nouveau.
+      if (result.ok && result.tasks) onTasksUpdated(result.tasks, result.trash);
     });
   }
 
@@ -757,7 +788,8 @@ function _startIdleSyncWatcher() {
     if (Date.now() - lastMs < SYNC_IDLE_INTERVAL) return;
 
     const result = await syncBidirectional();
-    if (result.ok && result.tasks && _onTasksUpdatedGlobal) {
+    // Même logique que syncAuto : re-render seulement si le Gist avait du nouveau
+    if (result.ok && result.tasks && result.hasRemoteChanges && _onTasksUpdatedGlobal) {
       _onTasksUpdatedGlobal(result.tasks, result.trash);
     }
   }, 60 * 1000);
