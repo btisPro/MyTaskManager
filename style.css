@@ -332,26 +332,40 @@ body.dragging-active .tree-root-node > * {
 }
 #searchInput:focus { border-color: var(--accent); background: #fff; }
 
+/* ── Bandeau options de recherche ─────────────────────────
+   Affiché sous la topbar uniquement quand une recherche est
+   active (classe "hidden" retirée par app.js).
+   Pleine largeur, fond légèrement teinté pour le distinguer
+   de la topbar sans être intrusif. */
 #searchOptions {
   display: flex;
-  gap: 10px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 5px 14px;
+  background: #f0f1ff;          /* légèrement indigo, cohérent avec l'accent */
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+  flex-wrap: wrap;               /* évite le débordement sur très petits écrans */
 }
+
+#searchOptions.hidden { display: none; }
 
 #searchOptions label {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.78rem;
+  gap: 5px;
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
+  /* Grande zone de clic sur mobile (min 44px de hauteur via padding) */
+  padding: 4px 0;
 }
 
 #searchOptions input[type="checkbox"] {
   accent-color: var(--accent);
   cursor: pointer;
+  width: 16px;
+  height: 16px;
 }
 
 /* ── Views ────────────────────────────────────────────────── */
@@ -1213,9 +1227,7 @@ h2:hover { color: var(--accent); }
   #sidebar.collapsed { width: 0 !important; }
   #resizeHandle { display: none; }
   .panel { padding: 16px 14px 32px; }
-  #searchOptions { display: none; }
   #topbar { gap: 8px; padding: 0 10px; }
-  #searchOptions { flex-wrap: nowrap; }
 }
 
 @media (max-width: 640px) {

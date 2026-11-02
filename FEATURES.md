@@ -225,6 +225,7 @@ Comportements selon le timing d'appui :
 | 11.2 | Scope : niveau courant | Par défaut, ne cherche que dans la liste visible | `app.js › runSearch › searchLevel` |
 | 11.3 | Scope : tous les niveaux | Option "Tous les niveaux" — parcours récursif de tout l'arbre | `app.js › runSearch › searchAll` |
 | 11.4 | Recherche dans les notes | Option "Inclure les notes" — cherche dans le HTML Quill (texte brut) | `app.js › matchTask` |
+| 11.9b | Bandeau options sous topbar | Les cases à cocher (tous niveaux / notes) sont dans un bandeau `#searchOptions` affiché **sous la topbar** uniquement quand la recherche est active (`showSearch` retire `hidden`, `closeSearch` le remet). Invisible au repos → plus de place dans la topbar sur mobile. | `app.js › showSearch / closeSearch`, `index.html › #searchOptions`, `style.css › #searchOptions` |
 | 11.5 | Affichage du chemin | Chaque résultat montre son chemin d'appartenance (ex: `Projet › Sprint`) | `app.js › buildTaskItem › pathSpan` |
 | 11.6 | Hint de résultats | Nombre de résultats + scope affiché sous le champ | `app.js › runSearch › searchHint` |
 | 11.7 | Mode searchResultMode | Pas de drag intra-liste, navigation vers la tâche dans l'arbre au clic 📋 | `app.js › buildTaskItem / noteIcon` |

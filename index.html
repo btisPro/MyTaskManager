@@ -53,10 +53,6 @@
         <span class="app-title">MtM</span>
         <div id="searchBox">
           <input type="text" id="searchInput" placeholder="Rechercher..." autocomplete="off">
-          <div id="searchOptions">
-            <label><input type="checkbox" id="searchAllLevels"> Tous les niveaux</label>
-            <label><input type="checkbox" id="searchInNotes"> Dans les notes</label>
-          </div>
         </div>
         <button id="trashBtn" title="Corbeille" class="trash-topbar-btn">🗑<span id="trashBadge" class="trash-badge hidden"></span></button>
         <div id="syncStatus" class="sync-status sync-off" title="Synchronisation">
@@ -64,6 +60,16 @@
           <span id="syncLabel">Local</span>
         </div>
         <button id="syncSettingsBtn" title="Paramètres de synchronisation">⚙</button>
+      </div>
+
+      <!-- BANDEAU OPTIONS DE RECHERCHE
+           Affiché sous la topbar uniquement quand une recherche est en cours.
+           La classe "hidden" est gérée par app.js (ajoutée/retirée selon searchInput.value).
+           Sur desktop : les options étaient dans la topbar ; sur mobile elles n'avaient
+           pas de place. Ce bandeau résout les deux cas. -->
+      <div id="searchOptions" class="hidden">
+        <label><input type="checkbox" id="searchAllLevels"> Tous les niveaux</label>
+        <label><input type="checkbox" id="searchInNotes"> Dans les notes</label>
       </div>
 
       <!-- MODALE D'ACCUEIL -->

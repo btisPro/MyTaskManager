@@ -329,12 +329,13 @@ const subTaskInput   = document.getElementById('subTaskInput');    // champ "nou
 const addSubBtn      = document.getElementById('addSubBtn');
 const subTaskListEl  = document.getElementById('subTaskList');     // <ul> liste des sous-tâches
 
-const searchInput    = document.getElementById('searchInput');
+const searchInput     = document.getElementById('searchInput');
+const searchOptions   = document.getElementById('searchOptions');   // bandeau sous la topbar
 const searchAllLevels = document.getElementById('searchAllLevels');
-const searchInNotes  = document.getElementById('searchInNotes');
-const searchClose    = document.getElementById('searchClose');
-const searchList     = document.getElementById('searchList');
-const searchHint     = document.getElementById('searchHint');
+const searchInNotes   = document.getElementById('searchInNotes');
+const searchClose     = document.getElementById('searchClose');
+const searchList      = document.getElementById('searchList');
+const searchHint      = document.getElementById('searchHint');
 
 /* ═══════════════════════════════════════════════════════════
    QUILL — Éditeur de notes enrichi
@@ -914,6 +915,10 @@ function showSearch() {
   listView.classList.add('hidden');
   detailView.classList.add('hidden');
   searchView.classList.remove('hidden');
+  // Affiche le bandeau d'options sous la topbar dès qu'une recherche est active.
+  // Sur mobile, ces options n'ont pas de place dans la topbar ; le bandeau
+  // les rend toujours accessibles quelle que soit la taille d'écran.
+  searchOptions.classList.remove('hidden');
 }
 
 /**
@@ -923,6 +928,8 @@ function showSearch() {
 function closeSearch() {
   searchInput.value = '';
   searchView.classList.add('hidden');
+  // Masque le bandeau d'options : il ne doit être visible que pendant une recherche.
+  searchOptions.classList.add('hidden');
   if (navigationStack.length === 1) {
     listView.classList.remove('hidden');
   } else {
