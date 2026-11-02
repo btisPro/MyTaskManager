@@ -134,32 +134,35 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 ### 9.1b Drag tactile (mobile) — Touch events
 
-Trois comportements selon le timing d'appui :
+> **⚠️ Menu contextuel temporairement désactivé** (voir section 10)
+> Le long press déclenche directement le drag sans passer par le menu contextuel.
+> Raison : iOS Safari émet un `touchcancel` à chaque changement DOM pendant un
+> touch actif, ce qui interrompait irrémédiablement le suivi du doigt après
+> l'affichage du menu. La réactivation du menu nécessite une architecture
+> différente (ex : menu overlay sans mutation DOM significative).
+
+Comportements selon le timing d'appui :
 
 | Timing | Comportement |
 |---|---|
-| Mouvement < 200 ms | Scroll natif — les timers sont annulés |
-| Appui 200–500 ms puis mouvement > 8 px | Drag tactile (annule le long press) |
-| Appui ≥ 500 ms immobile | Menu contextuel affiché + vibration |
-| → **Doigt bouge (sans lâcher) après menu** | **Menu fermé + drag démarré immédiatement** |
-| → Doigt levé après menu | Menu reste visible, fin de cycle |
+| Mouvement dans les 150 premiers ms | Scroll natif — abandon propre |
+| Appui ≥ 600 ms immobile | **Drag démarre directement** (vibration 40 ms) |
+| Relâchement pendant le drag | Drop appliqué |
+| Relâchement avant le drag | Abandon propre |
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 9.1b.1 | Délai scroll (200 ms) | Avant 200 ms, tout mouvement du doigt = scroll natif (cleanupTouch immédiat). | `app.js › initTouchDrag › dragReadyTimer / dragReady` |
-| 9.1b.2 | Drag entre 200 ms et 500 ms | Après 200 ms, bouger le doigt > 8 px → annule le long press et démarre le drag. | `app.js › initTouchDrag › onDocMove` |
-| 9.1b.3 | Long press (500 ms) | Maintenir le doigt immobile ≥ 500 ms → affiche le menu contextuel + vibration 40 ms + `menuShown = true`. | `app.js › initTouchDrag › longPressTimer` |
-| 9.1b.4 | **Drag depuis le menu (sans lâcher)** | Si le menu est affiché (`menuShown = true`) et le doigt bouge > 8 px → `hideContextMenu()` + recalibrage de `originX/Y` + `startDrag()`. Même cycle touch, aucun nouveau `touchstart` nécessaire. | `app.js › initTouchDrag › onDocMove` |
-| 9.1b.5 | Ghost visuel tactile | Clone du `<li>` source, semi-transparent (opacity 0.75), centré sous le doigt (-20 px vertical), `pointer-events: none`. | `app.js › initTouchDrag › createTouchGhost / startDrag` |
-| 9.1b.6 | Indicateur de position | Tiers haut/bas = ligne d'insertion (`drop-before`/`drop-after`), tiers central = sous-tâche (`drop-child`). Mis à jour à chaque touchmove via `updateDropFeedback`. | `app.js › initTouchDrag › updateDropFeedback` |
-| 9.1b.7 | Drop au relâchement | `touchend` utilise `changedTouches[0]` (position du doigt levé) avec fallback sur `curX/Y` pour appeler `applyDrop`. | `app.js › initTouchDrag › onDocEnd` |
-| 9.1b.8 | Annulation propre | `touchcancel` système (appel entrant…) → `cleanupTouch()` sans appliquer de déplacement. | `app.js › initTouchDrag › onDocCancel` |
-| 9.1b.9 | `touchstart` non-passif | Déclaré `{ passive: false }` sur `containerEl` pour autoriser `preventDefault()` dans `touchmove` et bloquer le scroll. | `app.js › initTouchDrag` |
-| 9.1b.10 | Handlers sur `document` | `touchmove`/`touchend`/`touchcancel` sur `document` (pas `containerEl`) — ajoutés au touchstart, retirés par cleanupTouch. Survie au `touchcancel` iOS causé par l'affichage du menu. | `app.js › initTouchDrag › onDocMove/End/Cancel` |
-| 9.1b.11 | `e.touches[0]` dans touchmove | Utilise `e.touches[0]` (position courante) plutôt que `e.changedTouches` dans `onDocMove` — plus fiable sur iOS Safari après un `touchcancel`. | `app.js › initTouchDrag › onDocMove` |
-| 9.1b.12 | `touchcancel` ignoré si `menuShown` | iOS émet `touchcancel` quand le DOM change (menu apparu). Si `menuShown = true`, le cancel est ignoré pour conserver l'état de drag. | `app.js › initTouchDrag › onDocCancel` |
-| 9.1b.13 | `curX/Y` — dernière position connue | Mis à jour à chaque `touchmove` pour servir de fallback dans `touchend` si `changedTouches[0]` est absent. | `app.js › initTouchDrag › curX/curY` |
-| 9.1b.14 | Recalibrage `originX/Y` après menu | Après fermeture du menu, `originX/Y` recalibré sur la position courante pour éviter que la distance accumulée depuis le touchstart ne décale le ghost. | `app.js › initTouchDrag › onDocMove` |
+| 9.1b.1 | Fenêtre scroll (150 ms) | Si le doigt bouge dans les 150 premières ms → scroll natif, `cleanup()` immédiat. | `app.js › initTouchDrag › scrollBailTimer / mayScroll` |
+| 9.1b.2 | Long press (600 ms) | Maintenir le doigt immobile ≥ 600 ms → `startDrag()` directement + vibration 40 ms. | `app.js › initTouchDrag › longPressTimer` |
+| 9.1b.3 | `startDrag()` sans mutation DOM | Crée uniquement un overlay ghost (position fixed), sans modifier la liste. iOS n'émet donc pas de `touchcancel`. | `app.js › initTouchDrag › startDrag` |
+| 9.1b.4 | Ghost visuel | Clone du `<li>` source, `opacity: 0.72`, `pointer-events: none`, centré sous le doigt (-24 px vertical). | `app.js › initTouchDrag › createGhost / moveGhost` |
+| 9.1b.5 | Feedback de drop | Tiers haut → `drop-before`, tiers central → `drop-child` (sous-tâche), tiers bas → `drop-after`. Mis à jour à chaque `touchmove`. | `app.js › initTouchDrag › updateFeedback` |
+| 9.1b.6 | Drop au relâchement | `touchend` lit `changedTouches[0]` (correct dans touchend) avec fallback `curX/Y`. Applique `applyDrop` si drag actif. | `app.js › initTouchDrag › onEnd` |
+| 9.1b.7 | Annulation | `touchcancel` système → `cleanup()` propre. | `app.js › initTouchDrag › onCancel` |
+| 9.1b.8 | `e.touches[0]` dans `onMove` | Position courante du doigt, plus fiable que `changedTouches` dans `touchmove` sur iOS. | `app.js › initTouchDrag › onMove` |
+| 9.1b.9 | Handlers sur `document` | `touchmove/touchend/touchcancel` ajoutés au touchstart, retirés par `cleanup()`. Nommés (pas lambdas) pour `removeEventListener`. | `app.js › initTouchDrag › onMove/onEnd/onCancel` |
+| 9.1b.10 | `touchstart` non-passif | `{ passive: false }` pour autoriser `preventDefault()` dans `touchmove` et bloquer le scroll pendant le drag. | `app.js › initTouchDrag` |
+| 9.1b.11 | `removeEventListener` avec `false` | Seule la valeur `capture` compte pour identifier le listener. On passe `false` explicitement (pas les options `passive`). | `app.js › initTouchDrag › cleanup` |
 
 ### 9.2 Drag vers l'arbre (déplacement entre niveaux)
 
@@ -194,15 +197,23 @@ Trois comportements selon le timing d'appui :
 
 ## 10. Menu contextuel (clic droit / long press)
 
+> **⚠️ Menu contextuel temporairement désactivé sur mobile et desktop**
+> Le code `showContextMenu` est conservé intégralement mais n'est plus appelé.
+> - **Desktop** : le clic droit appelle `e.preventDefault()` seulement (pas de menu).
+> - **Mobile** : le long press déclenche directement le drag (voir §9.1b).
+> Raison : iOS Safari émet `touchcancel` quand le DOM change pendant un touch
+> actif (affichage du menu) → le suivi du doigt est impossible après.
+> Pour réactiver : décommenter la ligne contextmenu dans `buildTaskItem` et
+> rappeler `showContextMenu` dans `longPressTimer`.
+
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 10.1 | Affichage au clic droit (desktop) | Menu positionné à la souris, repositionné pour rester dans le viewport | `app.js › showContextMenu` |
-| 10.2 | Affichage au long press (mobile) | Maintenir 500 ms sur une tâche → même menu, positionné sous le doigt, items plus hauts pour le touch | `app.js › initTouchDrag › longPressTimer` |
-| 10.3 | Options de déplacement | ⬆ Tout en haut, ▲+5, ▲+10, ▲+20, ▼-5, ▼-10, ▼-20 positions | `app.js › showContextMenu › items` |
+| 10.1 | ~~Affichage au clic droit (desktop)~~ | **DÉSACTIVÉ** — `e.preventDefault()` seulement | `app.js › buildTaskItem › contextmenu` |
+| 10.2 | ~~Affichage au long press (mobile)~~ | **DÉSACTIVÉ** — le long press démarre le drag directement | `app.js › initTouchDrag › longPressTimer` |
+| 10.3 | Options de déplacement | Code conservé : ⬆ Tout en haut, ▲+5, ▲+10, ▲+20, ▼-5, ▼-10, ▼-20 | `app.js › showContextMenu › items` |
 | 10.4 | Vrai parent retrouvé | En mode recherche, `findParentList` retrouve le vrai tableau parent | `app.js › showContextMenu` |
 | 10.5 | Rafraîchissement adapté | Relance `runSearch()` si mode recherche, sinon `renderList` | `app.js › showContextMenu` |
 | 10.6 | Fermeture automatique | Sur clic/tap ailleurs, scroll, ou touche Échap | `app.js › document click / scroll / keydown` |
-| 10.7 | Drag depuis le menu (mobile) | Si le doigt bouge après le long press (sans lâcher), le menu se ferme et le drag démarre immédiatement dans le même cycle touch (`menuShown → hideContextMenu → startDrag`) | `app.js › initTouchDrag › menuShown / startDrag` |
 
 ---
 
@@ -360,14 +371,13 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `result.trash` passé à `onSyncUpdate` au démarrage | Sans ça, la corbeille distante n'était pas chargée en mémoire au démarrage (mergedTrash ignoré) |
 | `initTouchDrag()` appelé **une seule fois** à l'init | Même principe qu'`initTreeDropDelegation` : les handlers se cumuleraient sinon |
 | `dragReadyTimer` (200 ms) avant tout drag | Si le doigt bouge avant 200 ms → `cleanupTouch()` immédiat, scroll natif, pas de drag |
-| `menuShown` flag dans `initTouchDrag` | Indique que le menu est affiché dans ce cycle. Si le doigt bouge ensuite, `onDocMove` ferme le menu et démarre le drag sans nouveau `touchstart`. |
-| `startDrag()` factorisée | Appelée depuis deux chemins : mouvement 200–500 ms et mouvement après menu. Ne pas dupliquer cette logique. |
-| Recalibrage de `originX/Y` après fermeture du menu | Après `hideContextMenu()`, recalibrer l'origine pour que le seuil `MOVE_THRESHOLD` et la position du ghost soient cohérents. |
-| Handlers `touchmove/end/cancel` sur `document` | iOS Safari émet `touchcancel` quand le DOM change (menu affiché). Les handlers sur `containerEl` cessent de recevoir les events après ce cancel. Sur `document`, ils survivent. |
-| `touchcancel` ignoré si `menuShown = true` | Le cancel iOS est causé par le menu — on ne réinitialise pas l'état, le drag reste possible si le doigt bouge ensuite. |
-| `e.touches[0]` (pas `changedTouches`) dans `onDocMove` | `changedTouches` peut être vide ou incomplet sur iOS Safari après un `touchcancel`. `touches[0]` donne toujours la position courante pendant un `touchmove`. |
-| `removeEventListener` avec `false` (pas les options `passive`) | `removeEventListener` ignore les options `passive/once` — seule la valeur `capture` compte pour identifier le listener. Toujours passer `false` explicitement. |
-| `touchstart` déclaré `{ passive: false }` | Obligatoire pour que `preventDefault()` dans `touchmove` soit respecté par le navigateur et bloque le scroll pendant le drag. |
-| `e.preventDefault()` dans `touchmove` seulement si drag actif ou `menuShown` | Avant que le drag soit actif (et hors menu), ne pas bloquer le scroll natif. |
+| `startDrag()` ne modifie PAS la structure DOM de la liste | Crée uniquement un overlay ghost (position fixed). Toute mutation de la liste pendant un touch actif → iOS émet `touchcancel` → le suivi du doigt est interrompu. |
+| Menu contextuel désactivé sur mobile | iOS Safari émet `touchcancel` quand le DOM change pendant un touch. Afficher un menu = changement DOM = touchcancel = fin du suivi du doigt. Seule solution fiable : ne pas afficher de menu pendant un cycle touch. |
+| `e.touches[0]` (pas `changedTouches`) dans `onMove` | `touches[0]` = position courante du doigt actif, toujours disponible pendant `touchmove`. `changedTouches` peut être incomplet sur iOS. |
+| `changedTouches[0]` dans `touchend` | Dans `touchend`, le doigt vient d'être levé donc absent de `touches[]`. `changedTouches[0]` est correct ici. Fallback sur `curX/Y` si absent. |
+| `removeEventListener` avec `false` (pas les options `passive`) | Seule la valeur `capture` compte pour identifier le listener. Passer `false` explicitement. |
+| `touchstart` déclaré `{ passive: false }` | Obligatoire pour que `preventDefault()` dans `touchmove` soit respecté et bloque le scroll pendant le drag. |
+| `e.preventDefault()` dans `touchmove` seulement si `canDrag` | Avant que le drag soit actif, ne pas bloquer le scroll natif. |
 | Drop-center (sous-tâche) : vérifier `isDescendantOrSelf` | Interdire de dropper une tâche sur l'un de ses propres descendants. |
-| `curX/Y` mis à jour à chaque `touchmove` | Sert de fallback dans `touchend` si `changedTouches` est vide. Sans ça, le drop peut être appliqué aux coordonnées (0,0). |
+| `curX/Y` mis à jour à chaque `touchmove` | Sert de fallback dans `touchend`. Sans ça, le drop peut être appliqué aux coordonnées (0,0). |
+| `initTouchDrag()` appelé une seule fois à l'init | Les handlers se cumuleraient sinon. |
