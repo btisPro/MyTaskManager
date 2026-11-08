@@ -14,6 +14,8 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 1.4 | Arborescence infinie | `children[]` imbriqués sans limite de profondeur | Structure récursive |
 | 1.5 | Champ `clicks` | Toujours présent (migration), incrémenté au clic, mais non affiché | `app.js › handleClick` |
 | 1.6 | Champ `updatedAt` | Posé par `makeTask()` à la création et par `touchUpdatedAt()` à chaque mutation ; `ensureTimestamps()` ne l'ajoute que si absent (migration données anciennes) | `app.js › makeTask / touchUpdatedAt`, `sync.js › ensureTimestamps` |
+| 1.7 | Champ `dueDate` | String ISO `"YYYY-MM-DD"` ou `""`. Défaut `""`. Migré par `migrateTask`. | `app.js › migrateTask / makeTask` |
+| 1.8 | Champ `importance` | `"high"` \| `"medium"` \| `"low"` (défaut). Toute valeur invalide → `"low"`. Migré par `migrateTask`. | `app.js › migrateTask / makeTask` |
 
 ---
 
@@ -79,6 +81,9 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 6.1 | Ouverture | Clic sur 📋 ou navigation depuis l'arbre → `openDetail` | `app.js › openDetail / navigateToTask` |
 | 6.2 | Titre éditable inline | Clic sur le `<h2>` → remplacé par `<input>`, validé par Entrée/blur/Échap | `app.js › startEditTitle` |
 | 6.3 | Mise à jour du breadcrumb | Le titre modifié se propage dans le fil d'Ariane et dans l'arbre | `app.js › startEditTitle › commit` |
+| 6.2b | Importance | Sélecteur `🟢 Faible / 🟠 Moyenne / 🔴 Forte` sous le titre. Sauvegardé immédiatement à chaque changement. Met à jour la couleur dans la liste. | `app.js › showDetail › detailImportance` |
+| 6.2c | Date d'échéance | `<input type=date>` sous le titre. Bouton ✕ pour effacer. Sauvegardé immédiatement. | `app.js › showDetail › detailDueDate` |
+| 6.2d | `_refreshCurrentList()` | Rafraîchit la liste visible (racine ou sous-tâches) après modification importance/date sans quitter le détail. | `app.js › _refreshCurrentList` |
 | 6.4 | Notes Quill | Éditeur rich-text intégré (bold, italic, listes, liens, images…) | `app.js › quill` |
 | 6.5 | Auto-sauvegarde notes | 300 ms après le dernier caractère saisi dans Quill | `app.js › quill.on('text-change')` |
 | 6.6 | Liste sous-tâches | Rendu de `task.children` dans `<ul#subTaskList>` | `app.js › showDetail › renderList` |
@@ -308,7 +313,27 @@ Comportements selon le timing d'appui :
 
 ---
 
-## 16. Utilitaires internes
+## 16. Coloration d'urgence des tâches
+
+| # | Fonctionnalité | Détail | Fichier / Fonction |
+|---|---|---|---|
+| 16a.1 | `taskUrgencyClass(task)` | Retourne `''` \| `'task-warning'` \| `'task-urgent'` selon importance + date d'échéance. | `app.js › taskUrgencyClass` |
+| 16a.2 | ROUGE (`task-urgent`) | importance = "high" **OU** date dépassée/aujourd'hui/dans ≤ 3 jours. | `app.js › taskUrgencyClass` |
+| 16a.3 | ORANGE (`task-warning`) | importance = "medium" **OU** date dans 4–10 jours. | `app.js › taskUrgencyClass` |
+| 16a.4 | Priorité importance > date | "high" prime sur toute date. La date est testée ensuite. | `app.js › taskUrgencyClass` |
+| 16a.5 | CSS fond + bordure gauche | `.task-urgent` : fond `#fff1f1`, bordure gauche rouge `#ef4444`. `.task-warning` : fond `#fff8f0`, bordure gauche orange `#f97316`. Subtil pour ne pas surcharger. | `style.css` |
+| 16a.6 | Comparaison dates ISO | Comparaison lexicographique de chaînes `YYYY-MM-DD` (ordre alphabétique = chronologique). Calcul en heure locale. | `app.js › taskUrgencyClass › dateInDays` |
+| 16a.7 | Priorité drop-child > urgence | Les classes drop-child (bleu) remplacent le fond rouge/orange pendant le drag. | `style.css` |
+
+## 17. Tests automatisés
+
+| # | Fonctionnalité | Détail | Fichier |
+|---|---|---|---|
+| 17.1 | Runner Node.js | `node tests.js` — 70 assertions, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds` | `tests.js` |
+| 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
+
+## 18. Utilitaires internes
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
@@ -326,7 +351,7 @@ Comportements selon le timing d'appui :
 
 ---
 
-## 17. Points de vigilance — Ne jamais supprimer
+## 19. Points de vigilance — Ne jamais supprimer
 
 Ces éléments sont critiques et ont déjà causé des régressions par le passé :
 

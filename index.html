@@ -207,6 +207,20 @@
         </div>
         <h2 id="detailTitle"></h2>
 
+        <!-- Importance et date d'échéance — affichés sous le titre, avant les notes.
+             Ces champs sont sauvegardés immédiatement à chaque changement (app.js › showDetail). -->
+        <div id="detailMeta" class="detail-meta">
+          <label class="meta-label" for="detailImportance">Importance</label>
+          <select id="detailImportance" class="meta-select">
+            <option value="low">🟢 Faible</option>
+            <option value="medium">🟠 Moyenne</option>
+            <option value="high">🔴 Forte</option>
+          </select>
+          <label class="meta-label" for="detailDueDate">Échéance</label>
+          <input type="date" id="detailDueDate" class="meta-date">
+          <button id="detailDueDateClear" class="meta-clear" title="Effacer la date">✕</button>
+        </div>
+
         <div class="detail-section">
           <label class="section-label">Notes</label>
           <div id="quillEditor"></div>

@@ -2,7 +2,10 @@
    STORAGE — Persistance dans localStorage
    Les tâches sont sérialisées en JSON sous la clé "tasks".
    Chaque tâche a la forme :
-     { id, text, clicks, notes, children[] }
+     { id, text, clicks, notes, children[], updatedAt,
+       dueDate, importance }
+   - dueDate    : string ISO "YYYY-MM-DD" ou "" (pas de date)
+   - importance : "high" | "medium" | "low" (défaut "low")
 ════════════════════════════════════════════════════════════ */
 
 /**
@@ -25,11 +28,16 @@ function loadTasks() {
  */
 function migrateTask(t, i) {
   return {
-    id:       t.id       ?? Date.now() + i,  // id unique basé sur le timestamp
-    text:     t.text     ?? '',
-    clicks:   t.clicks   ?? 0,               // compteur de clics de priorité
-    notes:    t.notes    ?? '',              // HTML Quill
-    children: (t.children ?? []).map(migrateTask),
+    id:         t.id         ?? Date.now() + i,
+    text:       t.text       ?? '',
+    clicks:     t.clicks     ?? 0,
+    notes:      t.notes      ?? '',
+    children:   (t.children  ?? []).map(migrateTask),
+    // Champs de priorité visuelle (ajoutés en v2) :
+    // dueDate    : date d'échéance au format "YYYY-MM-DD", ou "" si non définie
+    // importance : niveau d'importance textuel, défaut "low"
+    dueDate:    t.dueDate    ?? '',
+    importance: (['high','medium','low'].includes(t.importance)) ? t.importance : 'low',
   };
 }
 
@@ -324,10 +332,13 @@ const taskListEl     = document.getElementById('taskList');        // <ul> liste
 const backBtn        = document.getElementById('backBtn');         // bouton ← Retour
 const deleteTaskBtn  = document.getElementById('deleteTaskBtn');   // bouton Supprimer la tâche courante
 const breadcrumb     = document.getElementById('breadcrumb');      // fil d'Ariane
-const detailTitle    = document.getElementById('detailTitle');     // <h2> titre de la tâche
-const subTaskInput   = document.getElementById('subTaskInput');    // champ "nouvelle sous-tâche"
-const addSubBtn      = document.getElementById('addSubBtn');
-const subTaskListEl  = document.getElementById('subTaskList');     // <ul> liste des sous-tâches
+const detailTitle      = document.getElementById('detailTitle');       // <h2> titre de la tâche
+const detailImportance = document.getElementById('detailImportance'); // <select> importance
+const detailDueDate    = document.getElementById('detailDueDate');    // <input type=date>
+const detailDueDateClear = document.getElementById('detailDueDateClear'); // bouton ✕ date
+const subTaskInput     = document.getElementById('subTaskInput');     // champ "nouvelle sous-tâche"
+const addSubBtn        = document.getElementById('addSubBtn');
+const subTaskListEl    = document.getElementById('subTaskList');      // <ul> liste des sous-tâches
 
 const searchInput     = document.getElementById('searchInput');
 const searchOptions   = document.getElementById('searchOptions');   // bandeau sous la topbar
@@ -810,6 +821,46 @@ function showDetail(task) {
   detailTitle.textContent = task.text;
   detailTitle.title = 'Cliquer pour modifier le titre';
 
+  // ── Champs importance et date d'échéance ─────────────────────────────────
+  // Chargement des valeurs courantes de la tâche
+  detailImportance.value = task.importance || 'low';
+  detailDueDate.value    = task.dueDate    || '';
+
+  // Sauvegarde immédiate à chaque modification du sélecteur d'importance.
+  // On remplace le listener précédent en clonant l'élément (évite l'accumulation
+  // de listeners si showDetail est appelé plusieurs fois sur des tâches différentes).
+  const impClone = detailImportance.cloneNode(true);
+  detailImportance.parentNode.replaceChild(impClone, detailImportance);
+  // Après le cloneNode, on doit récupérer la référence depuis le DOM car la
+  // constante `detailImportance` pointe toujours vers l'ancien nœud.
+  // On utilise directement l'élément cloné via une variable locale.
+  impClone.addEventListener('change', () => {
+    task.importance = impClone.value;
+    touchUpdatedAt(task.id);
+    saveTasks();
+    // Rafraîchit la liste visible pour mettre à jour la couleur immédiatement
+    _refreshCurrentList();
+  });
+
+  const dateClone = detailDueDate.cloneNode(true);
+  detailDueDate.parentNode.replaceChild(dateClone, detailDueDate);
+  dateClone.addEventListener('change', () => {
+    task.dueDate = dateClone.value;
+    touchUpdatedAt(task.id);
+    saveTasks();
+    _refreshCurrentList();
+  });
+
+  const clearClone = detailDueDateClear.cloneNode(true);
+  detailDueDateClear.parentNode.replaceChild(clearClone, detailDueDateClear);
+  clearClone.addEventListener('click', () => {
+    dateClone.value = '';
+    task.dueDate = '';
+    touchUpdatedAt(task.id);
+    saveTasks();
+    _refreshCurrentList();
+  });
+
   // Charge les notes dans Quill (en mode silencieux pour ne pas déclencher l'auto-save)
   currentNoteTaskId = task.id;
   const delta = quill.clipboard.convert({ html: task.notes || '' });
@@ -821,6 +872,21 @@ function showDetail(task) {
   // Clic sur le <h2> → édition inline du titre
   detailTitle.onclick = null;
   detailTitle.onclick = () => startEditTitle(task);
+}
+
+/**
+ * Rafraîchit la liste actuellement visible (liste racine ou sous-tâches)
+ * après une modification d'importance ou de date dans la vue détail.
+ * Cela met à jour les couleurs sans quitter la vue détail.
+ */
+function _refreshCurrentList() {
+  if (navigationStack.length === 1) {
+    renderList(taskListEl, rootTasks);
+  } else {
+    const parent = navigationStack[navigationStack.length - 1];
+    renderList(subTaskListEl, parent.tasks);
+  }
+  renderTree();
 }
 
 /**
@@ -1067,6 +1133,53 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideContex
    TASK LIST RENDER — Rendu des listes de tâches
 ════════════════════════════════════════════════════════════ */
 
+/**
+ * Calcule la classe CSS de coloration d'urgence d'une tâche.
+ *
+ * Règles (par ordre de priorité décroissante) :
+ *   ROUGE  ("task-urgent")  : importance === "high"
+ *                           OU date d'échéance dépassée (< aujourd'hui)
+ *                           OU date d'échéance dans ≤ 3 jours
+ *   ORANGE ("task-warning") : importance === "medium"
+ *                           OU date d'échéance dans 4–10 jours
+ *   (rien)                  : importance === "low" et pas de date proche
+ *
+ * La comparaison de dates se fait en "jours calendaires" (sans tenir compte
+ * de l'heure) pour éviter les surprises dues aux fuseaux horaires.
+ * On compare les chaînes ISO YYYY-MM-DD directement : ordre lexicographique
+ * = ordre chronologique pour ce format.
+ *
+ * @param {Task} task
+ * @returns {string} '' | 'task-warning' | 'task-urgent'
+ */
+function taskUrgencyClass(task) {
+  const imp = task.importance || 'low';
+  const due = task.dueDate    || '';
+
+  // Calcule "aujourd'hui" en ISO YYYY-MM-DD (heure locale, pas UTC)
+  const now   = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+
+  // Date dans N jours (heure locale)
+  function dateInDays(n) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + n);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  const in3  = dateInDays(3);  // dans 3 jours
+  const in10 = dateInDays(10); // dans 10 jours
+
+  // ── Conditions ROUGE ────────────────────────────────────────────────────
+  if (imp === 'high') return 'task-urgent';
+  if (due && due <= in3) return 'task-urgent'; // dépassée OU ≤ 3 jours
+
+  // ── Conditions ORANGE ───────────────────────────────────────────────────
+  if (imp === 'medium') return 'task-warning';
+  if (due && due <= in10) return 'task-warning'; // 4–10 jours
+
+  return ''; // faible importance, pas de date proche
+}
+
 /** Index de la tâche en cours de drag dans sa liste source. */
 let dragSrcIndex = null;
 /** Référence au tableau source lors d'un drag (pour valider le drop). */
@@ -1097,7 +1210,10 @@ function renderList(listEl, tasks, searchResultMode = false) {
  */
 function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   const li = document.createElement('li');
-  li.className = 'task-item';
+  // taskUrgencyClass() retourne '' | 'task-warning' | 'task-urgent'
+  // Ces classes colorent le fond du <li> selon l'importance/la date d'échéance.
+  const urgency = taskUrgencyClass(task);
+  li.className = 'task-item' + (urgency ? ' ' + urgency : '');
   li.draggable = true;
   li.dataset.taskId = task.id;
 
@@ -1727,7 +1843,8 @@ function makeTask(text) {
   const now = Date.now();
   // updatedAt posé dès la création : le merge distant saura que cette tâche
   // est plus récente que toute version antérieure sans timestamp.
-  return { id: now, text: text.trim(), clicks: 0, notes: '', children: [], updatedAt: now };
+  return { id: now, text: text.trim(), clicks: 0, notes: '', children: [], updatedAt: now,
+           dueDate: '', importance: 'low' };
 }
 
 // Ajout d'une tâche racine via le bouton ou la touche Entrée

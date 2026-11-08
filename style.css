@@ -518,6 +518,29 @@ h2:hover { color: var(--accent); }
   outline-offset: -2px;
 }
 
+/* ── Coloration d'urgence ─────────────────────────────────────────────────
+   Appliquées par taskUrgencyClass() dans buildTaskItem.
+   ROUGE  : importance forte, ou échéance dépassée / dans ≤ 3 jours.
+   ORANGE : importance moyenne, ou échéance dans 4–10 jours.
+   Les couleurs restent subtiles (fond et bordure gauche) pour ne pas
+   surcharger visuellement une longue liste de tâches. */
+.task-item.task-urgent {
+  background: #fff1f1;
+  border-color: #fca5a5;
+  border-left: 3px solid #ef4444;
+}
+.task-item.task-warning {
+  background: #fff8f0;
+  border-color: #fcd34d;
+  border-left: 3px solid #f97316;
+}
+/* Priorité : drop-child > urgence (l'outline du drop doit toujours être visible) */
+.task-item.drop-child.task-urgent,
+.task-item.drop-child.task-warning {
+  background: #eef2ff;
+  border-color: var(--accent);
+}
+
 /* Tâche source pendant un drag tactile : réduite en opacité */
 .task-item.touch-src {
   opacity: 0.35;
@@ -666,6 +689,64 @@ h2:hover { color: var(--accent); }
 .breadcrumb span:hover { color: var(--accent); }
 .breadcrumb .sep { cursor: default; color: #d1d5db; }
 .breadcrumb .current { color: var(--text); cursor: default; font-weight: 600; }
+
+/* ── Bloc importance + date d'échéance (vue détail) ──────────────────────
+   Affiché sous le titre, avant les notes. Disposition en ligne, compact. */
+.detail-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: #f8f9ff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.meta-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.meta-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--surface);
+  cursor: pointer;
+  color: var(--text);
+}
+.meta-select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+
+.meta-date {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.meta-date:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+
+.meta-clear {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.meta-clear:hover { background: #fee2e2; border-color: #fca5a5; color: #ef4444; }
 
 .detail-section { margin-bottom: 26px; }
 
