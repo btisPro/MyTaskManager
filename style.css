@@ -1071,6 +1071,22 @@ h2:hover { color: var(--accent); }
 .sync-log .log-error { color: #f87171; }
 .sync-log .log-info  { color: #93c5fd; }
 
+/* ── Pied de modale sync : numéro de version ─────────────────
+   Affiché en bas de la modale, hors du bloc syncFields (visible
+   que la sync soit activée ou non). Discret, centré, petit. */
+.sync-version-footer {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  text-align: center;
+}
+.sync-version {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  letter-spacing: 0.04em;
+  font-family: monospace;
+}
+
 /* ── Bouton corbeille topbar ──────────────────────────────── */
 
 .trash-topbar-btn {

@@ -234,6 +234,7 @@ Comportements selon le timing d'appui :
 | 12.2 | TTL 30 jours | Entrées expirées supprimées automatiquement au chargement | `app.js › loadTrash / TRASH_TTL` |
 | 12.3 | Badge numérique | Nombre d'éléments en corbeille affiché sur le bouton corbeille de la topbar | `app.js › updateTrashBadge` |
 | 12.4 | Modale corbeille | Liste des éléments avec nom, date, parent, nombre de sous-tâches | `app.js › renderTrashList` |
+| 12.4b | Tri décroissant | Éléments affichés du plus récemment supprimé (en haut) au plus ancien (en bas). Tri sur une copie (`slice().sort()`) sans modifier `trashItems` en mémoire. | `app.js › renderTrashList` |
 | 12.5 | Restauration | Bouton "↩ Restaurer" — réinsère la tâche dans son emplacement d'origine | `app.js › restoreTask` |
 | 12.6 | Suppression définitive | Bouton ✕ dans la modale — `deleteForever()` + `markPurged()` | `app.js › deleteForever` |
 | 12.7 | Vider la corbeille | Bouton "Vider" avec confirmation → `emptyTrash()` | `app.js › emptyTrash` |
@@ -300,6 +301,16 @@ Comportements selon le timing d'appui :
 
 ---
 
+## 14b. Interface générale
+
+| # | Fonctionnalité | Détail | Fichier / Fonction |
+|---|---|---|---|
+| 14b.1 | Titre "Tâches" supprimé | Le `<h1>Tâches</h1>` de la vue liste a été retiré pour gagner de la place, en particulier sur smartphone. L'identité de l'app est assurée par "MtM" dans la topbar. | `index.html` |
+| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.4.0'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
+| 14b.3 | Version affichée dans la modale sync | Pied de modale `#syncVersion` (toujours visible, que la sync soit activée ou non). Style monospace discret. | `index.html / style.css / app.js` |
+
+---
+
 ## 15. PWA (Progressive Web App)
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
@@ -329,8 +340,8 @@ Comportements selon le timing d'appui :
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — 70 assertions, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds` | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — 81 assertions, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION` | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes

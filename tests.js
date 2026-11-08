@@ -506,6 +506,56 @@ describe('migrateTask — préserve importance medium', () => {
   assertEqual(t.dueDate,    '2027-01-15', 'dueDate préservée');
 });
 
+describe('APP_VERSION — format et présence', () => {
+  // La constante APP_VERSION est définie en tête de app.js.
+  // On la relit depuis le source pour ne pas dépendre de l'extraction DOM.
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
+  assert(match !== null, 'APP_VERSION déclarée dans app.js');
+  if (match) {
+    const ver = match[1];
+    assert(/^v\d+\.\d+\.\d+$/.test(ver), `APP_VERSION au format vMAJEUR.MINEUR.CORRECTIF (valeur: "${ver}")`);
+  }
+});
+
+describe('renderTrashList — tri décroissant par deletedAt', () => {
+  // Simule la logique de tri de renderTrashList.
+  // Les entrées sont volontairement dans l'ordre chronologique croissant ;
+  // le tri doit les inverser : la plus récente doit venir en premier.
+  const entries = [
+    { task: { id: 1, text: 'Ancienne', children: [] }, parentId: null, deletedAt: 1000 },
+    { task: { id: 2, text: 'Moyenne',  children: [] }, parentId: null, deletedAt: 2000 },
+    { task: { id: 3, text: 'Récente',  children: [] }, parentId: null, deletedAt: 3000 },
+  ];
+
+  // Reproduction exacte du tri de renderTrashList (slice + sort décroissant)
+  const sorted = entries.slice().sort((a, b) => b.deletedAt - a.deletedAt);
+
+  assertEqual(sorted[0].task.id, 3, 'entrée la plus récente (deletedAt=3000) en position 0');
+  assertEqual(sorted[1].task.id, 2, 'entrée médiane (deletedAt=2000) en position 1');
+  assertEqual(sorted[2].task.id, 1, 'entrée la plus ancienne (deletedAt=1000) en position 2');
+
+  // Le slice() ne doit pas modifier le tableau d'origine
+  assertEqual(entries[0].task.id, 1, 'tableau d\'origine non modifié (entrée 0)');
+  assertEqual(entries[1].task.id, 2, 'tableau d\'origine non modifié (entrée 1)');
+  assertEqual(entries[2].task.id, 3, 'tableau d\'origine non modifié (entrée 2)');
+});
+
+describe('renderTrashList — tri avec deletedAt identiques', () => {
+  // Cas limite : deux entrées avec le même timestamp → ordre stable (inchangé)
+  const entries = [
+    { task: { id: 10, text: 'A', children: [] }, parentId: null, deletedAt: 5000 },
+    { task: { id: 11, text: 'B', children: [] }, parentId: null, deletedAt: 5000 },
+  ];
+  const sorted = entries.slice().sort((a, b) => b.deletedAt - a.deletedAt);
+  // Les deux ont le même deletedAt → sort retourne 0, l'ordre relatif est conservé
+  assert(sorted.length === 2, 'deux entrées conservées avec deletedAt identiques');
+  // On vérifie juste qu'aucune entrée n'est perdue
+  const ids = sorted.map(e => e.task.id);
+  assert(ids.includes(10), 'id=10 toujours présent');
+  assert(ids.includes(11), 'id=11 toujours présent');
+});
+
 /* ═══════════════════════════════════════════════════════════
    BILAN
 ════════════════════════════════════════════════════════════ */

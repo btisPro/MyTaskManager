@@ -181,15 +181,22 @@
 
               <div id="syncLog" class="sync-log"></div>
             </div>
+
+            <!-- Pied de modale : version de l'application.
+                 La valeur est injectée par app.js au démarrage via
+                 document.getElementById('syncVersion').textContent = APP_VERSION. -->
+            <div class="sync-version-footer">
+              <span id="syncVersion" class="sync-version"></span>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- VUE LISTE -->
+      <!-- Le titre "Tâches" (h1) a été supprimé : il allourdissait l'affichage,
+           en particulier sur smartphone où l'espace vertical est précieux.
+           L'application s'appelle déjà "MtM" dans la topbar. -->
       <div id="listView" class="view panel">
-        <div class="view-header">
-          <h1>Tâches</h1>
-        </div>
         <div class="add-task">
           <input type="text" id="taskInput" placeholder="Nouvelle tâche..." autocomplete="off">
           <button id="addBtn">Ajouter</button>

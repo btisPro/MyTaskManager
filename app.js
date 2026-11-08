@@ -1,4 +1,15 @@
 /* ═══════════════════════════════════════════════════════════
+   VERSION — Numéro de version de l'application.
+   À incrémenter à chaque session de modifications.
+   Format : MAJEUR.MINEUR.CORRECTIF
+     MAJEUR  : refonte complète de l'architecture
+     MINEUR  : nouvelle fonctionnalité visible
+     CORRECTIF : correction de bug ou ajustement mineur
+   Affiché dans la modale de synchronisation (pied de page).
+════════════════════════════════════════════════════════════ */
+const APP_VERSION = 'v1.4.0';
+
+/* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
    Les tâches sont sérialisées en JSON sous la clé "tasks".
    Chaque tâche a la forme :
@@ -2046,7 +2057,13 @@ function renderTrashList() {
   }
   emptyMsg && emptyMsg.classList.add('hidden');
 
-  trashItems.forEach(entry => {
+  // Trie par date de suppression décroissante : la tâche la plus récemment
+  // supprimée apparaît en premier. On trie une copie superficielle du tableau
+  // (slice) pour ne pas modifier l'ordre de trashItems en mémoire —
+  // l'ordre interne de trashItems n'a pas d'importance, seul l'affichage change.
+  const sorted = trashItems.slice().sort((a, b) => b.deletedAt - a.deletedAt);
+
+  sorted.forEach(entry => {
     const li = document.createElement('li');
     li.className = 'trash-item';
 
@@ -2536,6 +2553,12 @@ function initTouchDrag(containerEl, getTasksFn) {
 
 applySidebarState(); // applique l'état mémorisé de la sidebar (repliée ou non)
 setupDetailDrag();   // rend la vue détail draggable vers la sidebar
+
+// Affiche le numéro de version dans le pied de la modale de synchronisation.
+// APP_VERSION est défini tout en haut du fichier ; on l'injecte ici car le DOM
+// est garanti prêt (les scripts sont chargés en bas de <body>).
+const syncVersionEl = document.getElementById('syncVersion');
+if (syncVersionEl) syncVersionEl.textContent = `MyTaskManager ${APP_VERSION}`;
 
 // Initialise l'UI de synchronisation (modale + indicateur de statut)
 if (typeof initSyncUI === 'function') {
