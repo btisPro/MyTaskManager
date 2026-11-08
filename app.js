@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.0.2';
+const APP_VERSION = 'v1.0.3';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
@@ -1174,8 +1174,23 @@ function hideContextMenu() {
   ctxMenu.classList.add('hidden');
 }
 
-// Fermeture automatique du menu contextuel
-document.addEventListener('click',   hideContextMenu);
+// ── Fermeture automatique du menu contextuel ──────────────────────────────
+//
+// Sur mobile, un appui long suivi d'un touchend génère un "click" synthétique
+// ~300 ms plus tard. Ce click est émis sur la zone de la liste (pas sur le menu)
+// et remonterait ici pour fermer immédiatement le menu qu'on vient d'ouvrir.
+//
+// Protection : initTouchDrag lève _suppressNextClick juste avant showContextMenu().
+// Le premier click reçu ici l'absorbe sans fermer le menu.
+// Les clicks suivants (sur les items du menu, ou hors du menu) ferment normalement.
+document.addEventListener('click', () => {
+  if (_suppressNextClick) {
+    // Click fantôme post-long-press → on l'absorbe silencieusement.
+    _suppressNextClick = false;
+    return;
+  }
+  hideContextMenu();
+});
 document.addEventListener('scroll',  hideContextMenu, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideContextMenu(); });
 
@@ -2309,112 +2324,101 @@ function findTaskById(list, id) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   TOUCH DRAG — Drag & Drop tactile pour mobile
+   TOUCH DRAG — Drag & Drop tactile + menu contextuel long press
    ─────────────────────────────────────────────────────────
-   Le Drag & Drop HTML5 natif ne fonctionne pas sur mobile.
+   Le Drag & Drop HTML5 natif est inopérant sur mobile (iOS/Android).
    On implémente un système complet via les Touch Events.
 
    COMPORTEMENTS selon le timing d'appui :
-   ┌─────────────────────────────────────────────────────────┐
-   │ < 200 ms puis mouvement  → scroll natif                 │
-   │ 200–500 ms puis mouvement → drag tactile                │
-   │ ≥ 500 ms immobile         → menu contextuel             │
-   │   └→ doigt bouge (sans lâcher) → menu fermé + drag     │
-   │   └→ doigt levé                → menu reste visible     │
-   └─────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────────┐
+   │ Mouvement > MOVE_PX dans les SCROLL_BAIL_MS premières ms     │
+   │   → scroll natif autorisé, abandon du geste                 │
+   │ Appui ≥ LONG_PRESS_MS immobile                               │
+   │   → menu contextuel + vibration 20 ms                       │
+   │   └→ doigt bouge > DRAG_PX ensuite → menu fermé + drag      │
+   │   └→ doigt levé → menu reste visible (choix d'un item)      │
+   │ Drag actif → touchend → drop appliqué                        │
+   └──────────────────────────────────────────────────────────────┘
 
-   ARCHITECTURE : touchstart sur containerEl (pour identifier la tâche),
-   touchmove/touchend/touchcancel sur `document` (ajoutés/retirés à chaque
-   cycle). Cette approche est nécessaire pour deux raisons :
+   PROBLÈMES MOBILES RÉSOLUS (v1.0.2) :
 
-   1. iOS Safari émet un `touchcancel` automatique quand le DOM change pendant
-      un touch (ex: le menu contextuel s'affiche). Les handlers sur containerEl
-      cessent de fonctionner après ce cancel. Sur `document`, ils persistent.
+   1. CLICK FANTÔME après touchend (Android Chrome, Samsung Internet)
+      Sur mobile, un appui court génère AUSSI un événement "click"
+      synthétique ~300 ms après touchend. Sans protection, ce click remontait
+      jusqu'à document.addEventListener('click', hideContextMenu) et fermait
+      le menu instantanément après chaque long press.
+      SOLUTION : flag _suppressNextClick levé juste avant showContextMenu().
+      Le handler global de fermeture l'absorbe sans fermer le menu.
 
-   2. En utilisant `e.touches[0]` (pas `changedTouches`) dans touchmove, on
-      accède toujours à la position courante du doigt, même si le navigateur
-      n'a pas inclus ce toucher dans `changedTouches` pour cet event.
+   2. TOUCHCANCEL iOS lors du changement DOM (menu affiché)
+      iOS Safari émet automatiquement un touchcancel quand le DOM change
+      pendant un touch actif (ex : showContextMenu modifie ctxMenu.innerHTML).
+      SOLUTION : onCancel détecte menuShown=true et ré-enregistre les handlers
+      sur document sans nettoyer l'état. Les touchmove/touchend suivants sont
+      alors bien reçus.
 
-   Le `touchcancel` n'efface l'état que s'il est causé par le système (appel
-   entrant, etc.). S'il est causé par l'affichage du menu (menuShown = true),
-   il est ignoré — le drag reste possible sur le même cycle touch.
+   3. SCROLL INVOLONTAIRE qui annule le long press
+      Sur écran scrollable, tout touchmove déclenchait cleanup(), empêchant
+      le long press si l'utilisateur bougeait le doigt de 1px pendant l'appui.
+      SOLUTION : la fenêtre scroll (SCROLL_BAIL_MS) n'abandonne QUE si le
+      doigt s'est déplacé de plus de MOVE_PX px. Après SCROLL_BAIL_MS, le
+      long press continue même si le doigt bouge légèrement.
+
+   4. ORPHELINS DE HANDLERS si touchSrcTask introuvable
+      Si la tâche n'est pas dans getTasksFn() (rendu obsolète), attachDocHandlers
+      était quand même appelé. SOLUTION : vérification touchSrcTask avant attach.
+
+   ARCHITECTURE :
+     touchstart  → containerEl (event delegation, enregistré une fois à l'init)
+     touchmove / touchend / touchcancel → document (ajoutés/retirés dynamiquement)
+     La raison d'utiliser document (pas containerEl) pour move/end/cancel :
+     après le touchcancel iOS, les handlers sur containerEl cessent de recevoir
+     les events. Sur document, les handlers ré-enregistrés les reçoivent.
+
+   @param {HTMLElement} containerEl  Le <ul> contenant les tâches
+   @param {Function}    getTasksFn   Retourne le tableau de tâches courant (live)
 ════════════════════════════════════════════════════════════ */
 
 /**
- * Drag & Drop tactile + menu contextuel long press pour mobile.
- *
- * ═══════════════════════════════════════════════════════════════════════════
- * PROBLÈME iOS SAFARI — touchcancel lors d'un changement DOM
- * ═══════════════════════════════════════════════════════════════════════════
- * Quand on modifie le DOM pendant un touch actif (ex : afficher un menu
- * contextuel), iOS Safari émet un `touchcancel` automatique et arrête
- * d'envoyer des `touchmove` pour ce cycle.
- *
- * SOLUTION retenue : ré-enregistrement des handlers après le touchcancel.
- *
- * Quand le menu s'affiche, iOS émet touchcancel. Dans `onCancel` on détecte
- * si c'est un cancel "menu" (menuShown = true) : dans ce cas on NE nettoie
- * PAS l'état, et on ré-enregistre immédiatement onMove/onEnd/onCancel sur
- * document. iOS garantit que les prochains touchmove seront alors bien émis.
- *
- * ═══════════════════════════════════════════════════════════════════════════
- * COMPORTEMENTS
- * ═══════════════════════════════════════════════════════════════════════════
- *
- *  Phase 1 — Fenêtre scroll (0–150 ms) :
- *    Mouvement > MOVE_PX px  →  scroll natif, abandon
- *
- *  Phase 2 — Attente long press (150–600 ms) :
- *    Mouvement               →  ignoré (ni scroll ni drag)
- *
- *  Phase 3 — Long press atteint (≥ 600 ms immobile) :
- *    → Menu contextuel affiché, vibration 20 ms
- *    → iOS émet touchcancel (DOM modifié) → handlers ré-enregistrés
- *    → menuShown = true
- *
- *  Phase 4 — Après le menu :
- *    Doigt bouge > DRAG_PX   →  menu fermé + drag démarré (vibration 40 ms)
- *    Doigt levé              →  menu reste visible (l'utilisateur choisit un item)
- *
- *  Phase 5 — Drag actif :
- *    touchmove               →  ghost suit le doigt, feedback drop-before/child/after
- *    touchend                →  drop appliqué
- *    touchcancel système     →  abandon propre
- *
- * ═══════════════════════════════════════════════════════════════════════════
- * ARCHITECTURE
- * ═══════════════════════════════════════════════════════════════════════════
- *   touchstart  → containerEl (event delegation, une seule fois)
- *   touchmove / touchend / touchcancel → document (ajoutés/retirés dynamiquement)
- *
- * @param {HTMLElement} containerEl  Le <ul> contenant les tâches
- * @param {Function}    getTasksFn   Retourne le tableau de tâches courant (live)
+ * Flag module-level pour supprimer le prochain événement "click" global.
+ * Sur mobile, un touchend génère un click synthétique ~300 ms plus tard.
+ * Ce click remonte jusqu'à document.addEventListener('click', hideContextMenu)
+ * et fermerait le menu contextuel juste après son ouverture.
+ * On lève ce flag avant showContextMenu() et on le consomme dans le handler
+ * global de fermeture.
  */
+let _suppressNextClick = false;
+
 function initTouchDrag(containerEl, getTasksFn) {
 
-  // ── Constantes ────────────────────────────────────────────
-  const SCROLL_BAIL_MS = 150; // ms : mouvement avant ce délai = scroll natif
-  const LONG_PRESS_MS  = 600; // ms d'appui immobile → menu contextuel
-  const MOVE_PX        = 6;   // px de mouvement → "l'utilisateur scrolle"
-  const DRAG_PX        = 10;  // px de mouvement après menu → démarre le drag
+  // ── Constantes ────────────────────────────────────────────────────────────
+  const SCROLL_BAIL_MS = 120; // ms : fenêtre pendant laquelle un mouvement = scroll
+  const LONG_PRESS_MS  = 550; // ms d'appui immobile → menu contextuel (légèrement
+                              // réduit pour paraître plus réactif sur mobile)
+  const MOVE_PX        = 8;   // px de mouvement max dans la fenêtre scroll
+  const DRAG_PX        = 12;  // px de mouvement après menu → démarre le drag
 
-  // ── État du geste ─────────────────────────────────────────
+  // ── État du geste ─────────────────────────────────────────────────────────
   let scrollBailTimer = null;  // setTimeout SCROLL_BAIL_MS
   let longPressTimer  = null;  // setTimeout LONG_PRESS_MS
-  let mayScroll       = true;  // true pendant la fenêtre scroll
+  let mayScroll       = true;  // true pendant la fenêtre scroll (0 → SCROLL_BAIL_MS)
   let menuShown       = false; // true après l'affichage du menu (long press atteint)
   let canDrag         = false; // true quand le drag visuel est actif
-  let touchSrcTask    = null;  // tâche source
+  let touchSrcTask    = null;  // tâche source du geste
   let touchSrcList    = null;  // tableau contenant la tâche source
-  let touchGhost      = null;  // clone DOM qui suit le doigt
-  let srcLi           = null;  // <li> source (reçoit la classe touch-src)
-  let startX = 0, startY = 0;  // position au touchstart (sert au seuil scroll)
-  let menuX  = 0, menuY  = 0;  // position quand le menu s'est affiché (sert au seuil drag)
+  let touchGhost      = null;  // clone DOM fixed qui suit le doigt pendant le drag
+  let srcLi           = null;  // <li> source (affichée en opacité réduite pendant drag)
+  let startX = 0, startY = 0;  // position au touchstart (seuil de scroll)
+  let menuX  = 0, menuY  = 0;  // position du doigt quand le menu s'est affiché
   let curX   = 0, curY   = 0;  // dernière position connue du doigt
 
-  // ── Helpers ───────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
-  /** <li.task-item> sous (x,y), ghost masqué le temps de l'appel. */
+  /**
+   * Retourne le <li.task-item> situé aux coordonnées (x, y).
+   * Masque temporairement le ghost (pointer-events:none n'est pas toujours
+   * respecté par elementFromPoint sur tous les navigateurs mobiles).
+   */
   function getTaskItemAt(x, y) {
     if (touchGhost) touchGhost.style.display = 'none';
     const el = document.elementFromPoint(x, y);
@@ -2422,22 +2426,33 @@ function initTouchDrag(containerEl, getTasksFn) {
     return el ? el.closest('.task-item') : null;
   }
 
-  /** Crée le ghost : clone fixed du <li>, overlay visuel non-interactif. */
+  /**
+   * Crée le ghost visuel : clone fixed du <li>, superposé à l'écran,
+   * non interactif. N'est PAS inséré dans la liste → pas de touchcancel iOS.
+   */
   function createGhost(li) {
     const r = li.getBoundingClientRect();
     touchGhost = li.cloneNode(true);
     touchGhost.id = 'touchDragGhost';
     Object.assign(touchGhost.style, {
-      position: 'fixed', left: r.left + 'px', top: r.top + 'px',
-      width: r.width + 'px', opacity: '0.72', pointerEvents: 'none',
-      zIndex: '9999', background: '#eef2ff', border: '2px solid #4f46e5',
-      borderRadius: '6px', boxShadow: '0 4px 20px rgba(79,70,229,0.35)',
-      transform: 'scale(1.04)', transition: 'none',
+      position:     'fixed',
+      left:         r.left + 'px',
+      top:          r.top  + 'px',
+      width:        r.width + 'px',
+      opacity:      '0.78',
+      pointerEvents:'none',
+      zIndex:       '9999',
+      background:   '#eef2ff',
+      border:       '2px solid #4f46e5',
+      borderRadius: '6px',
+      boxShadow:    '0 4px 20px rgba(79,70,229,0.35)',
+      transform:    'scale(1.04)',
+      transition:   'none',
     });
     document.body.appendChild(touchGhost);
   }
 
-  /** Repositionne le ghost centré sous le doigt (-24 px vertical). */
+  /** Repositionne le ghost centré horizontalement sous le doigt (-24 px vertical). */
   function moveGhost(x, y) {
     if (!touchGhost) return;
     touchGhost.style.left = (x - touchGhost.offsetWidth / 2) + 'px';
@@ -2446,22 +2461,32 @@ function initTouchDrag(containerEl, getTasksFn) {
 
   /**
    * Démarre le drag visuel.
-   * N'insère rien dans la liste → pas de touchcancel iOS supplémentaire.
+   * On ne modifie PAS la structure DOM de la liste : on crée uniquement
+   * un overlay ghost en position:fixed. Cette contrainte est critique pour
+   * iOS qui émet un touchcancel supplémentaire dès qu'un nœud est inséré
+   * ou retiré du document pendant un touch actif.
    */
   function startDrag() {
     if (!touchSrcTask || canDrag) return;
     canDrag = true;
     if (navigator.vibrate) navigator.vibrate(40);
     document.body.classList.add('dragging-active');
+    // Cherche le <li> source dans le DOM courant
     srcLi = containerEl.querySelector(`[data-task-id="${touchSrcTask.id}"]`);
     if (srcLi) {
-      srcLi.classList.add('touch-src');
+      srcLi.classList.add('touch-src'); // opacité réduite pour indiquer la source
       createGhost(srcLi);
       moveGhost(curX, curY);
     }
   }
 
-  /** Feedback visuel drop-before / drop-child / drop-after sur le <li> cible. */
+  /**
+   * Feedback visuel : calcule dans quel tier (haut/centre/bas) du <li> cible
+   * se trouve le doigt et applique la classe CSS correspondante.
+   * Haut   → drop-before  (insérer avant la cible)
+   * Centre → drop-child   (devenir sous-tâche de la cible)
+   * Bas    → drop-after   (insérer après la cible)
+   */
   function updateFeedback(x, y) {
     containerEl.querySelectorAll('.task-item').forEach(el =>
       el.classList.remove('drop-before', 'drop-after', 'drop-child'));
@@ -2475,41 +2500,53 @@ function initTouchDrag(containerEl, getTasksFn) {
     else                      li.classList.add('drop-child');
   }
 
-  /** Applique le réordonnement ou l'imbrication au point de relâchement. */
+  /**
+   * Applique le déplacement au moment du relâchement.
+   * Gère trois cas : insérer avant la cible, insérer après, ou imbriquer.
+   */
   function applyDrop(x, y) {
     const targetLi = getTaskItemAt(x, y);
     if (!targetLi || !touchSrcTask) return;
-    if (targetLi.dataset.taskId === String(touchSrcTask.id)) return;
+    if (targetLi.dataset.taskId === String(touchSrcTask.id)) return; // drop sur soi-même
 
     const tasks  = getTasksFn();
     const srcId  = touchSrcTask.id;
     const destId = parseInt(targetLi.dataset.taskId);
     const srcIdx = tasks.findIndex(t => t.id === srcId);
     let destIdx  = tasks.findIndex(t => t.id === destId);
-    if (srcIdx === -1 || destIdx === -1) return;
+    if (srcIdx === -1 || destIdx === -1) return; // source ou cible absente de la liste
 
     if (targetLi.classList.contains('drop-child')) {
+      // Imbrication : protection anti-cycle (ne pas dropper sur un descendant)
       if (isDescendantOrSelf(destId, srcId, rootTasks)) return;
       const destTask = tasks[destIdx];
       const [moved]  = tasks.splice(srcIdx, 1);
       destTask.children.unshift(moved);
+      // Ouvre le nœud cible dans l'arbre pour montrer le nouvel enfant
       treeCollapsed[destId] = false;
       localStorage.setItem('treeCollapsed', JSON.stringify(treeCollapsed));
       touchUpdatedAt(moved.id); touchUpdatedAt(destTask.id);
     } else {
       const isBefore = targetLi.classList.contains('drop-before');
       const [moved]  = tasks.splice(srcIdx, 1);
+      // Recalcul de destIdx après le splice (l'index a pu changer)
       destIdx = tasks.findIndex(t => t.id === destId);
       tasks.splice(isBefore ? destIdx : destIdx + 1, 0, moved);
       touchUpdatedAt(moved.id);
     }
-    saveTasks(); renderList(containerEl, tasks); renderTree();
+    saveTasks();
+    renderList(containerEl, tasks);
+    renderTree();
   }
 
   /**
    * Enregistre les 3 handlers sur document.
-   * Appelé au touchstart ET après le touchcancel "menu" (ré-enregistrement).
-   * { passive: false } sur touchmove pour pouvoir appeler preventDefault().
+   * Appelé au touchstart (premier enregistrement) et dans onCancel quand
+   * menuShown=true (ré-enregistrement après le touchcancel iOS causé par le menu).
+   * { passive: false } sur touchmove pour pouvoir appeler preventDefault()
+   * et bloquer le scroll natif pendant le drag.
+   * On passe toujours { capture: false } pour que removeEventListener
+   * puisse identifier précisément ces listeners.
    */
   function attachDocHandlers() {
     document.addEventListener('touchmove',   onMove,   { passive: false, capture: false });
@@ -2519,8 +2556,9 @@ function initTouchDrag(containerEl, getTasksFn) {
 
   /**
    * Retire les 3 handlers document.
-   * removeEventListener identifie un listener par sa fonction + valeur capture
-   * uniquement (les options passive/once sont ignorées) → on passe false.
+   * IMPORTANT : on passe `false` (= capture: false) et non les options
+   * { passive, capture }. removeEventListener identifie un listener
+   * uniquement par [fonction, capture] — `passive` est ignoré lors du retrait.
    */
   function detachDocHandlers() {
     document.removeEventListener('touchmove',   onMove,   false);
@@ -2528,7 +2566,11 @@ function initTouchDrag(containerEl, getTasksFn) {
     document.removeEventListener('touchcancel', onCancel, false);
   }
 
-  /** Nettoyage complet de fin de cycle. */
+  /**
+   * Nettoyage complet de fin de cycle.
+   * Appelé après un drop, un abandon (scroll), un touchcancel système,
+   * ou un touchend sans drag actif.
+   */
   function cleanup() {
     detachDocHandlers();
     if (touchGhost) { touchGhost.remove(); touchGhost = null; }
@@ -2543,104 +2585,139 @@ function initTouchDrag(containerEl, getTasksFn) {
     canDrag      = false;
     touchSrcTask = null;
     touchSrcList = null;
-    // Baisse le flag global : le prochain pointerup pourra de nouveau déclencher
-    // handleClick si l'utilisateur fait un vrai tap court sans geste en cours.
+    // Baisse le flag global : le prochain pointerup sur textWrap pourra
+    // de nouveau déclencher handleClick (tap court = clic de priorité).
     _touchGestureActive = false;
   }
 
-  // ── Handlers document ─────────────────────────────────────
+  // ── Handlers document ─────────────────────────────────────────────────────
 
   function onMove(e) {
     if (!e.touches.length) return;
     const t = e.touches[0];
     curX = t.clientX; curY = t.clientY;
 
-    // ── Phase drag actif ──────────────────────────────────────────────────────
+    // Phase 1 — Drag actif : le ghost suit le doigt, feedback drop.
     if (canDrag) {
-      e.preventDefault(); // bloque le scroll natif pendant le drag
+      e.preventDefault(); // indispensable : bloque le scroll natif
       moveGhost(curX, curY);
       updateFeedback(curX, curY);
       return;
     }
 
-    // ── Phase post-menu : le doigt bouge après l'affichage du menu ───────────
+    // Phase 2 — Après le menu : le doigt bouge → démarrage du drag si > DRAG_PX.
     if (menuShown) {
-      const dist = Math.sqrt((curX - menuX) ** 2 + (curY - menuY) ** 2);
+      const dist = Math.hypot(curX - menuX, curY - menuY);
       if (dist > DRAG_PX) {
-        // Mouvement suffisant → ferme le menu et démarre le drag
         hideContextMenu();
         menuShown = false;
         startDrag();
-        // Les prochains onMove passeront dans la branche "canDrag" ci-dessus
+        // Les prochains onMove entreront dans la branche "canDrag" ci-dessus.
       }
-      // Tant que le seuil n'est pas atteint on ne fait rien (ni scroll, ni drop)
+      // Sous le seuil : on n'agit pas (ni scroll, ni drop prématuré).
       return;
     }
 
-    // ── Phase pré-long-press ──────────────────────────────────────────────────
-    const dist = Math.sqrt((curX - startX) ** 2 + (curY - startY) ** 2);
-    if (mayScroll && dist > MOVE_PX) {
-      // Mouvement dans la fenêtre scroll → c'est un scroll, on abandonne
-      cleanup();
+    // Phase 3 — Fenêtre scroll (0 → SCROLL_BAIL_MS) : abandon si déplacement > MOVE_PX.
+    if (mayScroll) {
+      const dist = Math.hypot(curX - startX, curY - startY);
+      if (dist > MOVE_PX) {
+        // L'utilisateur veut scroller → on s'efface complètement.
+        cleanup();
+      }
+      // Sous le seuil : on attend encore (ni drag, ni abandon).
+      return;
     }
-    // Entre 150 ms et 600 ms avec mouvement : on attend le long press sans agir.
+
+    // Phase 4 — Entre SCROLL_BAIL_MS et LONG_PRESS_MS avec mouvement : on ignore.
+    // On ne scrolle plus (mayScroll=false) mais on n'est pas encore en drag.
+    // Rien à faire : on attend que le long press se déclenche.
   }
 
   function onEnd(e) {
     const t = e.changedTouches[0];
     const x = t ? t.clientX : curX;
     const y = t ? t.clientY : curY;
-    if (canDrag) applyDrop(x, y);
-    // Si menuShown && !canDrag : doigt levé après le menu sans avoir bougé →
-    // le menu reste visible, l'utilisateur va taper sur un item. Pas de cleanup
-    // ici pour ne pas cacher le menu, mais on détache les handlers.
-    if (menuShown && !canDrag) {
+
+    // Cas 1 — Drag actif → appliquer le drop.
+    if (canDrag) {
+      applyDrop(x, y);
+      cleanup();
+      return;
+    }
+
+    // Cas 2 — Menu visible et doigt levé (sans avoir dragué) →
+    // le menu doit rester visible pour que l'utilisateur tape sur un item.
+    // On détache les handlers document mais on ne ferme PAS le menu.
+    // Le menu se fermera lui-même via document click ou Échap.
+    if (menuShown) {
       detachDocHandlers();
-      // Remet juste le strict minimum à zéro (le menu se fermera seul)
       clearTimeout(longPressTimer);  longPressTimer  = null;
       clearTimeout(scrollBailTimer); scrollBailTimer = null;
       mayScroll           = true;
       touchSrcTask        = null;
       touchSrcList        = null;
-      // On baisse le flag ici aussi : le doigt est levé, le geste est terminé.
-      // Le prochain tap court pourra de nouveau déclencher handleClick.
       _touchGestureActive = false;
+      // menuShown reste true : hideContextMenu le réinitialisera via
+      // le handler global (click document), mais seulement après que
+      // _suppressNextClick aura absorbé le click fantôme.
       return;
     }
+
+    // Cas 3 — Tap court (< LONG_PRESS_MS, pas de drag) → nettoyage simple.
+    // handleClick sera déclenché par pointerup si l'utilisateur a tapé
+    // sur le textWrap, car _touchGestureActive sera baissé par cleanup().
     cleanup();
   }
 
-  function onCancel() {
-    // iOS Safari émet touchcancel quand le DOM change pendant un touch actif.
-    // C'est précisément ce qui se passe quand showContextMenu() insère le menu.
+  function onCancel(e) {
+    // iOS Safari émet touchcancel quand le DOM est modifié pendant un touch.
+    // C'est précisément ce qui se passe quand showContextMenu() remplit ctxMenu.
     //
-    // Si menuShown = true : c'est un cancel "attendu" causé par le menu.
-    // On NE nettoie PAS l'état. On ré-enregistre immédiatement les handlers
-    // sur document → iOS enverra bien les prochains touchmove/touchend.
+    // Si menuShown = true : cancel "attendu" causé par l'affichage du menu.
+    // On NE réinitialise PAS l'état. On ré-enregistre les handlers sur document
+    // pour capturer les touchmove/touchend qui suivront.
     if (menuShown) {
-      detachDocHandlers(); // retire les anciens (sécurité : évite les doublons)
-      attachDocHandlers(); // ré-enregistre pour capturer la suite du geste
+      detachDocHandlers(); // retire d'abord pour éviter les doublons
+      attachDocHandlers(); // ré-enregistre : iOS enverra bien les prochains events
       return;
     }
-    // Cancel système (appel entrant, notification…) → nettoyage complet.
+
+    // Cancel système (appel entrant, alert, etc.) → nettoyage complet.
     cleanup();
   }
 
-  // ── touchstart sur containerEl ────────────────────────────
+  // ── touchstart sur containerEl ────────────────────────────────────────────
+  //
+  // { passive: false } est OBLIGATOIRE pour deux raisons :
+  //   1. Autoriser e.preventDefault() ici empêche le click synthétique mobile.
+  //      Sur Android, appuyer longtemps déclenche un "contextmenu" natif et/ou
+  //      un "click" fantôme ~300ms après touchend. e.preventDefault() au
+  //      touchstart supprime ces événements synthétiques.
+  //   2. Permet à touchmove (attaché sur document en passive:false) de bloquer
+  //      le scroll natif. Certains navigateurs ignorent preventDefault() dans
+  //      touchmove si le touchstart correspondant n'était pas cancelable.
   containerEl.addEventListener('touchstart', (e) => {
+    // Identifie la tâche touchée via event delegation
     const li = e.target.closest('.task-item');
     if (!li) return;
-    // On n'intercepte pas les touches sur des contrôles interactifs natifs
-    // (boutons, liens, champs texte, sélecteurs) pour ne pas bloquer leur
-    // comportement natif. Sans "select", le <select> importance dans #detailMeta
-    // ne recevrait pas l'événement tap et refuserait d'ouvrir son menu déroulant.
+
+    // Laisse passer les touches sur les contrôles interactifs natifs :
+    // boutons, liens, inputs, selects, et les boutons de tâche spécifiques
+    // (📋 détail, ✕ supprimer). Sans cette exclusion, appuyer sur ces
+    // contrôles déclencherait le long press au lieu de leur comportement natif.
     if (e.target.closest('button, a, input, select, .task-detail-btn, .task-delete')) return;
 
-    cleanup(); // nettoie un cycle précédent non terminé (sécurité)
+    // Prévenir le "contextmenu" natif Android (menu "copier/coller") et
+    // les clicks synthétiques post-touchend. Sans ça, Android Chrome affiche
+    // son propre menu contextuel en plus du nôtre, ou ferme notre menu
+    // immédiatement via le click fantôme.
+    e.preventDefault();
 
-    // Lève le flag global IMMÉDIATEMENT après cleanup() :
-    // dès ce moment, tout pointerup sur textWrap doit être ignoré par handleClick
-    // pour éviter que le DOM soit reconstruit pendant le geste en cours.
+    cleanup(); // nettoie tout cycle précédent non terminé (robustesse)
+
+    // Lève le flag global AVANT d'attacher les handlers :
+    // tout pointerup sur textWrap pendant ce geste sera ignoré par handleClick.
     _touchGestureActive = true;
 
     const touch = e.touches[0];
@@ -2650,35 +2727,54 @@ function initTouchDrag(containerEl, getTasksFn) {
     const tasks  = getTasksFn();
     touchSrcTask = tasks.find(t => t.id === parseInt(li.dataset.taskId)) || null;
     touchSrcList = tasks;
-    if (!touchSrcTask) return;
+
+    // Si la tâche n'est pas dans la liste courante (peut arriver après un
+    // re-render asynchrone), on abandonne proprement sans attacher de handlers.
+    if (!touchSrcTask) {
+      _touchGestureActive = false;
+      return;
+    }
 
     attachDocHandlers();
 
-    // Fenêtre scroll : si le doigt bouge dans les SCROLL_BAIL_MS ms → scroll
+    // Fenêtre scroll : pendant SCROLL_BAIL_MS ms, un mouvement > MOVE_PX = scroll.
     mayScroll = true;
     scrollBailTimer = setTimeout(() => {
       scrollBailTimer = null;
-      mayScroll = false;
+      mayScroll = false; // fenêtre scroll expirée : le mouvement ne scrolle plus
     }, SCROLL_BAIL_MS);
 
-    // Long press : LONG_PRESS_MS ms d'immobilité → menu contextuel
+    // Long press : si le doigt ne bouge pas trop pendant LONG_PRESS_MS ms →
+    // afficher le menu contextuel.
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
       clearTimeout(scrollBailTimer); scrollBailTimer = null;
       mayScroll = false;
 
-      // Mémorise la position du doigt au moment du menu pour calibrer DRAG_PX
+      // Mémorise la position du doigt au moment exact du déclenchement du menu.
+      // Le seuil DRAG_PX (pour démarrer le drag depuis le menu) est calculé
+      // depuis cette position, pas depuis startX/Y. Sans ça, les quelques pixels
+      // de déplacement accumulés pendant l'appui long fausseraient le seuil.
       menuX = curX; menuY = curY;
       menuShown = true;
 
-      // Vibration courte : indique à l'utilisateur que le menu va apparaître
+      // PROTECTION CLICK FANTÔME :
+      // Sur mobile, un touchend après long press génère souvent un "click"
+      // synthétique ~300 ms plus tard. Ce click remonterait jusqu'à
+      // document.addEventListener('click', hideContextMenu) et fermerait
+      // immédiatement notre menu. On lève ce flag AVANT d'afficher le menu
+      // pour que le handler global l'absorbe en silence.
+      _suppressNextClick = true;
+
+      // Vibration courte : feedback haptique indiquant que le menu va s'ouvrir.
       if (navigator.vibrate) navigator.vibrate(20);
 
-      // Affiche le menu contextuel.
-      // IMPORTANT : showContextMenu() modifie le DOM → iOS va émettre touchcancel.
-      // onCancel détecte menuShown = true et ré-enregistre les handlers.
+      // Affiche le menu.
+      // ATTENTION : showContextMenu() modifie ctxMenu.innerHTML → iOS émettra
+      // un touchcancel. onCancel détectera menuShown=true et ré-attachera les
+      // handlers sans nettoyer l'état.
       showContextMenu(
-        { preventDefault: ()=>{}, stopPropagation: ()=>{}, clientX: menuX, clientY: menuY },
+        { preventDefault: () => {}, stopPropagation: () => {}, clientX: menuX, clientY: menuY },
         touchSrcTask, touchSrcList, containerEl
       );
     }, LONG_PRESS_MS);

@@ -664,8 +664,8 @@ describe('filtre urgence + texte — intersection', () => {
 });
 
 /* ═══════════════════════════════════════════════════════════
-   CORRECTIONS v1.5.2 — Guards drag & menu contextuel
-   Vérifie que les trois mécanismes de protection sont présents
+   CORRECTIONS v1.0.2 — Guards drag & menu contextuel mobile
+   Vérifie que tous les mécanismes de protection sont présents
    dans le source de app.js.
 ════════════════════════════════════════════════════════════ */
 
@@ -751,16 +751,70 @@ describe('Guard menu contextuel — stopPropagation sur items', () => {
 
 describe('_touchGestureActive baissé dans onEnd (chemin menu sans drag)', () => {
   /*
-   * Dans le chemin "menuShown && !canDrag" de onEnd, on baisse aussi
-   * _touchGestureActive pour que le prochain tap court (sans geste) puisse
-   * déclencher handleClick normalement.
+   * Dans onEnd, quand menuShown=true (long press déclenché, doigt levé sans drag),
+   * on baisse _touchGestureActive pour que le prochain tap court puisse déclencher
+   * handleClick normalement.
    */
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 
-  // On cherche le pattern menuShown && !canDrag suivi de _touchGestureActive = false
+  // La nouvelle architecture utilise "if (menuShown)" dans onEnd
   assert(
-    /menuShown\s*&&\s*!canDrag[\s\S]{0,500}_touchGestureActive\s*=\s*false/.test(src),
-    '_touchGestureActive = false présent dans le chemin menuShown && !canDrag de onEnd'
+    /if\s*\(menuShown\)[\s\S]{0,500}_touchGestureActive\s*=\s*false/.test(src),
+    '_touchGestureActive = false présent dans le chemin menuShown de onEnd'
+  );
+});
+
+describe('Guard click fantôme — _suppressNextClick (mobile)', () => {
+  /*
+   * Correction v1.0.2 (mobile) :
+   * Sur Android/iOS, un appui long suivi d'un touchend génère un "click"
+   * synthétique ~300 ms plus tard. Ce click remontait jusqu'à
+   * document.addEventListener('click', hideContextMenu) et fermait le menu
+   * immédiatement après son ouverture, rendant le menu contextuel inutilisable.
+   *
+   * Solution : _suppressNextClick levé dans le longPressTimer avant showContextMenu,
+   * consommé dans le handler global click document sans fermer le menu.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes('let _suppressNextClick = false'),
+    'Flag _suppressNextClick déclaré dans le scope module'
+  );
+  assert(
+    src.includes('_suppressNextClick = true'),
+    '_suppressNextClick levé à true avant showContextMenu dans longPressTimer'
+  );
+  assert(
+    src.includes('_suppressNextClick = false'),
+    '_suppressNextClick consommé (remis à false) dans le handler click document'
+  );
+  // Vérifie que la levée précède showContextMenu dans le même bloc setTimeout
+  assert(
+    /_suppressNextClick\s*=\s*true[\s\S]{0,200}showContextMenu/.test(src),
+    '_suppressNextClick = true positionné avant showContextMenu()'
+  );
+  // Vérifie que le handler click absorbe le flag avant hideContextMenu
+  assert(
+    /_suppressNextClick[\s\S]{0,100}_suppressNextClick\s*=\s*false[\s\S]{0,50}return/.test(src),
+    'Handler click global absorbe _suppressNextClick et retourne sans fermer le menu'
+  );
+});
+
+describe('e.preventDefault() dans touchstart (mobile anti-click fantôme)', () => {
+  /*
+   * Sur Android Chrome, ne pas appeler e.preventDefault() dans touchstart
+   * laisse le navigateur générer un "contextmenu" natif et/ou un click synthétique
+   * après l'appui long. Ces événements parasites interferaient avec notre menu.
+   * e.preventDefault() dans touchstart { passive: false } les supprime.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  // On cherche e.preventDefault() dans le touchstart de initTouchDrag
+  // (après le commentaire de la fonction, avant attachDocHandlers)
+  assert(
+    /touchstart[\s\S]{0,2000}e\.preventDefault\(\)[\s\S]{0,500}cleanup\(\)/.test(src),
+    'e.preventDefault() appelé dans le touchstart de initTouchDrag'
   );
 });
 
