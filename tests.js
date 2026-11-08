@@ -556,11 +556,13 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
-describe('APP_VERSION — passage à v1.5.2', () => {
+describe('APP_VERSION — valeur courante v1.0.2', () => {
+  // La version est désormais gérée manuellement par le développeur.
+  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.2".
   const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
   if (match) {
-    assertEqual(match[1], 'v1.5.2', 'APP_VERSION vaut "v1.5.2" après le correctif drag & menu contextuel');
+    assertEqual(match[1], 'v1.0.2', 'APP_VERSION vaut "v1.0.2" (gestion manuelle)');
   }
 });
 

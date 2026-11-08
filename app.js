@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.5.2';
+const APP_VERSION = 'v1.0.2';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
