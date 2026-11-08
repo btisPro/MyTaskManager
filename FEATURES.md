@@ -152,17 +152,19 @@ Comportements selon le timing d'appui :
 
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
-| 9.1b.1 | Fenêtre scroll (150 ms) | Mouvement > 6 px dans les 150 premières ms → scroll natif, `cleanup()` immédiat. | `app.js › initTouchDrag › scrollBailTimer / mayScroll` |
-| 9.1b.2 | Long press (600 ms) | Appui ≥ 600 ms immobile → menu contextuel affiché + vibration 20 ms. | `app.js › initTouchDrag › longPressTimer` |
+| 9.1b.1 | Fenêtre scroll (120 ms) | Mouvement > 8 px dans les 120 premières ms → scroll natif, `cleanup()` immédiat. Après 120 ms, les mouvements n'abandonnent plus le geste. | `app.js › initTouchDrag › scrollBailTimer / mayScroll` |
+| 9.1b.2 | Long press (550 ms) | Appui ≥ 550 ms immobile → menu contextuel affiché + vibration 20 ms. | `app.js › initTouchDrag › longPressTimer` |
 | 9.1b.3 | Ré-enregistrement après touchcancel menu | iOS émet `touchcancel` quand le DOM change (menu apparu). `onCancel` détecte `menuShown = true`, détache puis ré-attache immédiatement les handlers → les prochains `touchmove` sont bien reçus. | `app.js › initTouchDrag › onCancel › attachDocHandlers` |
-| 9.1b.4 | Drag depuis le menu | Après le menu, si le doigt bouge > 10 px (`DRAG_PX`) → `hideContextMenu()` + `startDrag()`. Référence de position : `menuX/Y` (position du doigt au moment du menu). | `app.js › initTouchDrag › onMove` |
+| 9.1b.4 | Drag depuis le menu | Après le menu, si le doigt bouge > 12 px (`DRAG_PX`) → `hideContextMenu()` + `startDrag()`. Référence de position : `menuX/Y` (position du doigt au moment du menu). | `app.js › initTouchDrag › onMove` |
 | 9.1b.5 | `startDrag()` sans mutation DOM de liste | Crée uniquement un overlay ghost (position fixed). Pas d'insertion dans la liste → pas de touchcancel iOS supplémentaire. | `app.js › initTouchDrag › startDrag` |
-| 9.1b.6 | Ghost visuel | Clone du `<li>` source, `opacity: 0.72`, `pointer-events: none`, centré sous le doigt (-24 px vertical). | `app.js › initTouchDrag › createGhost / moveGhost` |
+| 9.1b.6 | Ghost visuel | Clone du `<li>` source, `opacity: 0.78`, `pointer-events: none`, centré sous le doigt (-24 px vertical). | `app.js › initTouchDrag › createGhost / moveGhost` |
 | 9.1b.7 | Feedback de drop | Tiers haut → `drop-before`, tiers central → `drop-child` (sous-tâche), tiers bas → `drop-after`. | `app.js › initTouchDrag › updateFeedback` |
-| 9.1b.8 | Drop au relâchement | `touchend` lit `changedTouches[0]` avec fallback `curX/Y`. Applique `applyDrop` si drag actif. Si menu visible et pas de drag → détache handlers seulement (menu reste). | `app.js › initTouchDrag › onEnd` |
+| 9.1b.8 | Drop au relâchement | `touchend` lit `changedTouches[0]` avec fallback `curX/Y`. Applique `applyDrop` + `cleanup()` si drag actif. Si menu visible et pas de drag → détache handlers, baisse `_touchGestureActive`, laisse le menu visible. | `app.js › initTouchDrag › onEnd` |
 | 9.1b.9 | `attachDocHandlers / detachDocHandlers` | Factorisées pour être appelées au touchstart ET dans `onCancel` (ré-enregistrement post-menu). Nommées (pas lambdas) pour `removeEventListener`. | `app.js › initTouchDrag` |
-| 9.1b.10 | `touchstart` non-passif | `{ passive: false }` pour autoriser `preventDefault()` dans `touchmove`. | `app.js › initTouchDrag` |
+| 9.1b.10 | `touchstart` non-passif + `e.preventDefault()` | `{ passive: false }` ET `e.preventDefault()` appelé dès le touchstart. Supprime le "contextmenu" natif Android et les clicks synthétiques post-touchend qui fermaient notre menu immédiatement après son ouverture. | `app.js › initTouchDrag` |
 | 9.1b.11 | `removeEventListener` avec `false` | Seule la valeur `capture` compte. On passe `false` explicitement (pas les options `passive`). | `app.js › initTouchDrag › detachDocHandlers` |
+| 9.1b.12 | `_suppressNextClick` (anti-click fantôme mobile) | Sur Android/iOS, un appui long suivi d'un touchend génère un "click" synthétique ~300 ms plus tard. Ce click remontait jusqu'à `document click → hideContextMenu` et fermait le menu instantanément. Flag levé dans `longPressTimer` avant `showContextMenu()`, absorbé dans le handler click document sans fermer le menu. | `app.js › _suppressNextClick` |
+| 9.1b.13 | `onEnd` restructuré (3 cas explicites) | Cas 1 : drag actif → `applyDrop` + `cleanup`. Cas 2 : menu visible sans drag → handlers détachés, menu laissé visible. Cas 3 : tap court → `cleanup` (handleClick déclenché par pointerup). | `app.js › initTouchDrag › onEnd` |
 
 ### 9.2 Drag vers l'arbre (déplacement entre niveaux)
 
@@ -345,8 +347,8 @@ Comportements selon le timing d'appui :
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — 125 assertions, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`), logique `applyDrop`, logique menu contextuel (delta positions) | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — 131 assertions, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions) | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes
@@ -415,6 +417,8 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `removeEventListener` + re-`addEventListener` dans `showDetail` (pas `cloneNode`) | `cloneNode(true)` + `replaceChild` détache les nœuds du DOM, ce qui invalide les références DOM constantes (`detailImportance`, `detailDueDate`, `detailDueDateClear`) et empêche leur utilisation au prochain appel de `showDetail`. La méthode correcte : stocker les handlers dans des variables (`_detailImpHandler`, etc.) et les remplacer explicitement. |
 | `closest('.detail-meta')` dans `dragstart` de `setupDetailDrag` | Sans cette exclusion, l'`<input type=date>` et le `<select>` du bloc `#detailMeta` sont draggables par défaut. Leur `dragstart` déclenche le handler du `detailView`, ce qui bloque le drag natif de l'input ET casse le drag des sous-tâches en interférant avec `dragListRef`. |
 | `'select'` dans la liste d'exclusions du `touchstart` de `initTouchDrag` | Sans cette exclusion, le `<select>` importance dans `#detailMeta` ne reçoit pas le tap correct et ne peut pas ouvrir son menu déroulant sur mobile. |
-| `_touchGestureActive` global (v1.0.2) | Flag levé dans `touchstart` et baissé dans `cleanup()` + `onEnd` (chemin menu). Bloque `handleClick` dans `pointerup` pendant tout cycle touch. Sans lui, un long press (600 ms) déclenchait `pointerup` → `handleClick` → `doFlush` → `renderList` qui détruisait le `<li>` pendant le geste, cassant à la fois le drag et le menu contextuel mobile. |
-| `pointerMoved = true` dans `dragstart` du `<li>` (v1.0.2) | Sur certains navigateurs, `dragstart` ne génère pas de `pointermove` préalable si la souris s'est peu déplacée. Sans ce forçage, `pointerMoved` restait `false` et `pointerup` (émis après la fin du drag) appelait `handleClick` → `doFlush` → `renderList` en cours de drag, détruisant les handlers. |
-| `e.stopPropagation()` dans les handlers click des items du menu contextuel (v1.0.2) | Sans ça, le tap sur un item du menu contextuel (mobile) générait un `click` synthétique qui remontait jusqu'à `document.addEventListener('click', hideContextMenu)` et fermait le menu AVANT que l'action de l'item s'exécute. Tous les items étaient donc non fonctionnels sur mobile. |
+| `_touchGestureActive` global | Flag levé dans `touchstart` et baissé dans `cleanup()` + `onEnd` (chemin menu). Bloque `handleClick` dans `pointerup` pendant tout cycle touch. Sans lui, un long press déclenchait `pointerup` → `handleClick` → `doFlush` → `renderList` qui détruisait le `<li>` pendant le geste. |
+| `pointerMoved = true` dans `dragstart` du `<li>` | Sur certains navigateurs, `dragstart` ne génère pas de `pointermove` préalable si la souris s'est peu déplacée. Sans ce forçage, `pointerMoved` restait `false` et `pointerup` post-drag appelait `handleClick` → `doFlush` → `renderList` en cours de drag. |
+| `e.stopPropagation()` dans les handlers click des items du menu contextuel | Sans ça, le tap sur un item du menu contextuel (mobile) générait un `click` synthétique qui remontait jusqu'à `document.addEventListener('click', hideContextMenu)` et fermait le menu AVANT que l'action s'exécute. |
+| `e.preventDefault()` dans `touchstart` de `initTouchDrag` | Sur Android Chrome, sans `preventDefault()`, un appui long génère un "contextmenu" natif (menu copier/coller) et/ou un "click" synthétique après touchend. Ces événements parasites interfèrent avec notre menu. |
+| `_suppressNextClick` dans handler `click` document | Deuxième ligne de défense contre le click fantôme mobile. Même avec `e.preventDefault()` dans touchstart, certains navigateurs émettent quand même un click synthétique. Le flag absorbe ce click sans fermer le menu. |
