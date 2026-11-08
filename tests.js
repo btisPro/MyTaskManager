@@ -556,6 +556,111 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
+describe('APP_VERSION — passage à v1.5.0', () => {
+  const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
+  if (match) {
+    assertEqual(match[1], 'v1.5.0', 'APP_VERSION vaut "v1.5.0" après l\'ajout des filtres urgence');
+  }
+});
+
+describe('collectAllTasksFlat — collecte plate de toute l\'arborescence', () => {
+  // Reproduction de la fonction collectAllTasksFlat de app.js.
+  // Utilisée quand un filtre urgence est coché sans texte.
+  function collectAllTasksFlat(tasks, pathPrefix) {
+    let results = [];
+    for (const t of tasks) {
+      const path = pathPrefix ? pathPrefix + ' › ' + t.text : t.text;
+      results.push({ ...t, _path: pathPrefix || 'Racine' });
+      if (t.children && t.children.length > 0) {
+        results = results.concat(collectAllTasksFlat(t.children, path));
+      }
+    }
+    return results;
+  }
+
+  const tree = [
+    { id: 1, text: 'A', importance: 'high',   dueDate: '', children: [
+      { id: 2, text: 'A1', importance: 'low',    dueDate: '', children: [] },
+      { id: 3, text: 'A2', importance: 'medium', dueDate: '', children: [] },
+    ]},
+    { id: 4, text: 'B', importance: 'low',    dueDate: '', children: [] },
+  ];
+
+  const all = collectAllTasksFlat(tree, '');
+  assertEqual(all.length, 4, 'collecte 4 tâches (racines + enfants)');
+  assertEqual(all[0].id, 1, 'premier élément = tâche racine A (id=1)');
+  assertEqual(all[0]._path, 'Racine', '_path racine = "Racine"');
+  assertEqual(all[1].id, 2, 'deuxième élément = sous-tâche A1 (id=2)');
+  assertEqual(all[1]._path, 'A',      '_path de A1 = "A"');
+  assertEqual(all[3].id, 4, 'quatrième élément = tâche racine B (id=4)');
+});
+
+describe('filtre urgence — logique de filtrage par taskUrgencyClass', () => {
+  // Simule la logique du filtre urgence dans runSearch :
+  //   candidates.filter(task => cls === 'task-urgent' || cls === 'task-warning')
+  const tasks = [
+    { id: 1, text: 'T1', importance: 'high',   dueDate: '',            children: [] },
+    { id: 2, text: 'T2', importance: 'medium', dueDate: '',            children: [] },
+    { id: 3, text: 'T3', importance: 'low',    dueDate: '',            children: [] },
+    { id: 4, text: 'T4', importance: 'low',    dueDate: isoInDays(2),  children: [] },
+    { id: 5, text: 'T5', importance: 'low',    dueDate: isoInDays(7),  children: [] },
+    { id: 6, text: 'T6', importance: 'low',    dueDate: isoInDays(20), children: [] },
+  ];
+
+  // Filtre 🔴 seul
+  const urgents = tasks.filter(t => taskUrgencyClass(t) === 'task-urgent');
+  assert(urgents.some(t => t.id === 1), 'id=1 (high) → urgent');
+  assert(urgents.some(t => t.id === 4), 'id=4 (low + date dans 2j) → urgent');
+  assert(!urgents.some(t => t.id === 2), 'id=2 (medium) → PAS urgent (warning)');
+  assert(!urgents.some(t => t.id === 3), 'id=3 (low, sans date) → PAS urgent');
+
+  // Filtre 🟠 seul
+  const warnings = tasks.filter(t => taskUrgencyClass(t) === 'task-warning');
+  assert(warnings.some(t => t.id === 2), 'id=2 (medium) → warning');
+  assert(warnings.some(t => t.id === 5), 'id=5 (low + date dans 7j) → warning');
+  assert(!warnings.some(t => t.id === 1), 'id=1 (high) → PAS warning (urgent)');
+  assert(!warnings.some(t => t.id === 6), 'id=6 (low + date dans 20j) → PAS warning');
+
+  // Filtres 🔴 ET 🟠 cochés simultanément = union
+  const both = tasks.filter(t => {
+    const cls = taskUrgencyClass(t);
+    return cls === 'task-urgent' || cls === 'task-warning';
+  });
+  assert(both.some(t => t.id === 1), 'union : id=1 (urgent) présent');
+  assert(both.some(t => t.id === 2), 'union : id=2 (warning) présent');
+  assert(both.some(t => t.id === 4), 'union : id=4 (urgent par date) présent');
+  assert(both.some(t => t.id === 5), 'union : id=5 (warning par date) présent');
+  assert(!both.some(t => t.id === 3), 'union : id=3 (aucun) absent');
+  assert(!both.some(t => t.id === 6), 'union : id=6 (date lointaine) absent');
+  assertEqual(both.length, 4, 'union : 4 tâches au total (1, 2, 4, 5)');
+});
+
+describe('filtre urgence + texte — intersection', () => {
+  // Quand texte ET filtre urgence sont actifs, on retourne l'intersection :
+  // la tâche doit correspondre au texte ET à la couleur.
+  const tasks = [
+    { id: 1, text: 'Projet Alpha', importance: 'high',   dueDate: '', children: [] },
+    { id: 2, text: 'Projet Beta',  importance: 'low',    dueDate: '', children: [] },
+    { id: 3, text: 'Tâche Alpha',  importance: 'medium', dueDate: '', children: [] },
+  ];
+
+  const needle = 'alpha';
+  // Résultats textuels : id=1 et id=3 (contiennent "alpha")
+  const textMatches = tasks.filter(t => t.text.toLowerCase().includes(needle));
+  assertEqual(textMatches.length, 2, 'recherche "alpha" → 2 résultats textuels');
+
+  // Filtre 🔴 sur les résultats textuels
+  const urgentAlpha = textMatches.filter(t => taskUrgencyClass(t) === 'task-urgent');
+  assertEqual(urgentAlpha.length, 1, 'filtre 🔴 sur "alpha" → 1 résultat (Projet Alpha)');
+  assertEqual(urgentAlpha[0].id, 1, 'le résultat est id=1 (Projet Alpha, high)');
+
+  // Filtre 🟠 sur les résultats textuels
+  const warningAlpha = textMatches.filter(t => taskUrgencyClass(t) === 'task-warning');
+  assertEqual(warningAlpha.length, 1, 'filtre 🟠 sur "alpha" → 1 résultat (Tâche Alpha)');
+  assertEqual(warningAlpha[0].id, 3, 'le résultat est id=3 (Tâche Alpha, medium)');
+});
+
 /* ═══════════════════════════════════════════════════════════
    BILAN
 ════════════════════════════════════════════════════════════ */

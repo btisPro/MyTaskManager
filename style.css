@@ -368,6 +368,25 @@ body.dragging-active .tree-root-node > * {
   height: 16px;
 }
 
+/* Trait vertical séparant les options de scope (gauche) des filtres urgence (droite) */
+.search-opt-sep {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* Label "🔴 Urgentes" : texte rouge discret pour rappeler la couleur des tâches */
+.search-opt-urgent {
+  color: #b91c1c !important;    /* rouge foncé lisible sur fond clair */
+}
+/* Label "🟠 Importantes" : texte orange discret */
+.search-opt-warning {
+  color: #c2410c !important;    /* orange foncé lisible sur fond clair */
+}
+
 /* ── Views ────────────────────────────────────────────────── */
 .view {
   flex: 1;

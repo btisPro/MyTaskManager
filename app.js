@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.4.0';
+const APP_VERSION = 'v1.5.0';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
@@ -355,6 +355,9 @@ const searchInput     = document.getElementById('searchInput');
 const searchOptions   = document.getElementById('searchOptions');   // bandeau sous la topbar
 const searchAllLevels = document.getElementById('searchAllLevels');
 const searchInNotes   = document.getElementById('searchInNotes');
+// Filtres urgence : permettent de rechercher par couleur, avec ou sans texte
+const searchUrgent    = document.getElementById('searchUrgent');    // 🔴 tâches urgentes
+const searchWarning   = document.getElementById('searchWarning');   // 🟠 tâches importantes
 const searchClose     = document.getElementById('searchClose');
 const searchList      = document.getElementById('searchList');
 const searchHint      = document.getElementById('searchHint');
@@ -1018,9 +1021,14 @@ function showSearch() {
 /**
  * Ferme la vue recherche et restaure la vue précédente
  * (liste si on était à la racine, détail sinon).
+ * Réinitialise aussi les filtres urgence pour ne pas les laisser cochés
+ * lors d'une prochaine ouverture du bandeau.
  */
 function closeSearch() {
   searchInput.value = '';
+  // Réinitialise les filtres urgence pour repartir d'un état propre
+  searchUrgent.checked  = false;
+  searchWarning.checked = false;
   searchView.classList.add('hidden');
   // Masque le bandeau d'options : il ne doit être visible que pendant une recherche.
   searchOptions.classList.add('hidden');
@@ -1924,10 +1932,19 @@ subTaskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSubT
 let searchTimer = null;
 
 // Déclenchement de la recherche 200 ms après la dernière frappe
+// Affiche le bandeau d'options dès que le champ reçoit le focus.
+// Cela permet à l'utilisateur de cocher un filtre urgence AVANT de taper du texte.
+// Le bandeau disparaît si l'utilisateur quitte le champ sans critère (via closeSearch).
+searchInput.addEventListener('focus', () => {
+  searchOptions.classList.remove('hidden');
+});
+
 searchInput.addEventListener('input', () => {
   clearTimeout(searchTimer);
   const q = searchInput.value.trim();
-  if (!q) { closeSearch(); return; }
+  // Si le champ est vide ET qu'aucun filtre urgence n'est coché → ferme la recherche.
+  // Si un filtre urgence est coché, on garde la recherche ouverte même sans texte.
+  if (!q && !searchUrgent.checked && !searchWarning.checked) { closeSearch(); return; }
   searchTimer = setTimeout(runSearch, 200);
 });
 
@@ -1935,38 +1952,118 @@ searchAllLevels.addEventListener('change', runSearch);
 searchInNotes.addEventListener('change',   runSearch);
 searchClose.addEventListener('click',      closeSearch);
 
-/** Lance la recherche et affiche les résultats. */
-function runSearch() {
-  const q = searchInput.value.trim();
-  if (!q) { closeSearch(); return; }
-
-  const allLevels = searchAllLevels.checked;
-  const inNotes   = searchInNotes.checked;
-  const needle    = q.toLowerCase();
-
-  let results;
-  if (allLevels) {
-    // Parcours récursif de toute l'arborescence
-    results = searchAll(rootTasks, needle, inNotes, '');
+// Les filtres urgence déclenchent immédiatement une (re)recherche.
+// Si on décoche le dernier filtre ET que le champ est vide → fermeture.
+searchUrgent.addEventListener('change', () => {
+  if (!searchUrgent.checked && !searchWarning.checked && !searchInput.value.trim()) {
+    closeSearch();
   } else {
-    // Parcours du seul niveau courant de la navigationStack
+    runSearch();
+  }
+});
+searchWarning.addEventListener('change', () => {
+  if (!searchUrgent.checked && !searchWarning.checked && !searchInput.value.trim()) {
+    closeSearch();
+  } else {
+    runSearch();
+  }
+});
+
+/**
+ * Lance la recherche et affiche les résultats dans la vue recherche.
+ *
+ * Logique combinée texte + urgence :
+ *   - Texte seul       : filtre par titre/notes (comportement historique)
+ *   - Urgence seul     : affiche TOUTES les tâches de la couleur sélectionnée
+ *                        (pas de filtre textuel, tous les niveaux)
+ *   - Texte + urgence  : intersection — résultats textuels ET de la bonne couleur
+ *
+ * Quand les deux filtres urgence sont cochés simultanément, on retourne l'union
+ * (toutes les tâches urgentes ET importantes), ce qui est plus utile que
+ * l'intersection (qui serait vide puisqu'une tâche ne peut pas être les deux).
+ */
+function runSearch() {
+  const q          = searchInput.value.trim();
+  const allLevels  = searchAllLevels.checked;
+  const inNotes    = searchInNotes.checked;
+  const filterUrg  = searchUrgent.checked;    // filtre 🔴 urgentes
+  const filterWarn = searchWarning.checked;   // filtre 🟠 importantes
+  const needle     = q.toLowerCase();
+
+  // Aucun critère → on ferme
+  if (!q && !filterUrg && !filterWarn) { closeSearch(); return; }
+
+  // ── Étape 1 : collecte du pool de candidats ────────────────────────────
+  // Si un filtre urgence est actif, on parcourt TOUJOURS tous les niveaux pour
+  // ne pas manquer des tâches urgentes enfouies dans des sous-tâches.
+  // Si seul le texte est actif, on respecte l'option "tous les niveaux".
+  let candidates;
+  if (filterUrg || filterWarn) {
+    // Toujours tous les niveaux quand un filtre urgence est coché
+    candidates = searchAll(rootTasks, needle, inNotes, '');
+    if (!q) {
+      // Pas de texte : on prend TOUTES les tâches de tous les niveaux comme candidats
+      // (searchAll avec needle vide retournerait [] car matchTask teste le texte)
+      candidates = collectAllTasksFlat(rootTasks, '');
+    }
+  } else if (allLevels) {
+    candidates = searchAll(rootTasks, needle, inNotes, '');
+  } else {
     const currentList = navigationStack[navigationStack.length - 1].tasks;
     const prefix = navigationStack.length > 1
       ? navigationStack.slice(1).map(e => e.title).join(' › ')
       : '';
-    results = searchLevel(currentList, needle, inNotes, prefix);
+    candidates = searchLevel(currentList, needle, inNotes, prefix);
+  }
+
+  // ── Étape 2 : filtre par urgence ───────────────────────────────────────
+  // On applique le filtre couleur après la collecte textuelle.
+  // Les deux filtres cochés = union (urgent OU warning), plus utile que l'intersection.
+  if (filterUrg || filterWarn) {
+    candidates = candidates.filter(task => {
+      const cls = taskUrgencyClass(task);
+      if (filterUrg  && cls === 'task-urgent')  return true;
+      if (filterWarn && cls === 'task-warning') return true;
+      return false;
+    });
   }
 
   showSearch();
 
-  const scope = allLevels ? 'tous les niveaux' : 'niveau courant';
-  const extra = inNotes ? ' + notes' : '';
-  searchHint.textContent = `${results.length} résultat(s) — recherche sur : ${scope}${extra}`;
+  // ── Étape 3 : construction du hint ────────────────────────────────────
+  const scopeParts = [];
+  if (q) scopeParts.push((filterUrg || filterWarn || allLevels) ? 'tous les niveaux' : 'niveau courant');
+  if (inNotes && q) scopeParts.push('notes');
+  if (filterUrg)  scopeParts.push('🔴 urgentes');
+  if (filterWarn) scopeParts.push('🟠 importantes');
+  searchHint.textContent = `${candidates.length} résultat(s) — filtres : ${scopeParts.join(' + ') || 'aucun'}`;
 
+  // ── Étape 4 : rendu ───────────────────────────────────────────────────
   searchList.innerHTML = '';
-  results.forEach((task, index) => {
-    searchList.appendChild(buildTaskItem(task, index, results, searchList, true));
+  candidates.forEach((task, index) => {
+    searchList.appendChild(buildTaskItem(task, index, candidates, searchList, true));
   });
+}
+
+/**
+ * Collecte récursivement TOUTES les tâches de l'arborescence (sans filtre textuel).
+ * Utilisé quand un filtre urgence est coché sans texte de recherche.
+ * Chaque tâche reçoit un `_path` indiquant son emplacement dans l'arbre.
+ *
+ * @param {Task[]} tasks       - Tableau à parcourir
+ * @param {string} pathPrefix  - Chemin accumulé depuis la racine
+ * @returns {Task[]}           - Copies plates avec `_path` injecté
+ */
+function collectAllTasksFlat(tasks, pathPrefix) {
+  let results = [];
+  for (const t of tasks) {
+    const path = pathPrefix ? pathPrefix + ' › ' + t.text : t.text;
+    results.push({ ...t, _path: pathPrefix || 'Racine' });
+    if (t.children.length > 0) {
+      results = results.concat(collectAllTasksFlat(t.children, path));
+    }
+  }
+  return results;
 }
 
 /**

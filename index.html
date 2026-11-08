@@ -63,13 +63,29 @@
       </div>
 
       <!-- BANDEAU OPTIONS DE RECHERCHE
-           Affiché sous la topbar uniquement quand une recherche est en cours.
-           La classe "hidden" est gérée par app.js (ajoutée/retirée selon searchInput.value).
-           Sur desktop : les options étaient dans la topbar ; sur mobile elles n'avaient
-           pas de place. Ce bandeau résout les deux cas. -->
+           Affiché sous la topbar dès que la recherche est active (texte saisi OU
+           filtre urgence coché). La classe "hidden" est gérée par app.js.
+           Groupe 1 (gauche) : options de scope (niveaux / notes).
+           Groupe 2 (droite) : filtres par couleur d'urgence (🔴 / 🟠).
+           Les deux groupes sont visuellement séparés par un trait vertical. -->
       <div id="searchOptions" class="hidden">
+        <!-- Groupe 1 : scope de la recherche textuelle -->
         <label><input type="checkbox" id="searchAllLevels"> Tous les niveaux</label>
         <label><input type="checkbox" id="searchInNotes"> Dans les notes</label>
+
+        <!-- Séparateur vertical entre les deux groupes d'options -->
+        <span class="search-opt-sep"></span>
+
+        <!-- Groupe 2 : filtres par urgence.
+             Cochés seuls (sans texte) : affiche toutes les tâches de la couleur
+             sélectionnée. Cochés avec texte : restreint les résultats textuels
+             à ceux qui correspondent aussi à la couleur. -->
+        <label class="search-opt-urgent">
+          <input type="checkbox" id="searchUrgent"> 🔴 Urgentes
+        </label>
+        <label class="search-opt-warning">
+          <input type="checkbox" id="searchWarning"> 🟠 Importantes
+        </label>
       </div>
 
       <!-- MODALE D'ACCUEIL -->

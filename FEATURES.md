@@ -217,12 +217,17 @@ Comportements selon le timing d'appui :
 | 11.2 | Scope : niveau courant | Par défaut, ne cherche que dans la liste visible | `app.js › runSearch › searchLevel` |
 | 11.3 | Scope : tous les niveaux | Option "Tous les niveaux" — parcours récursif de tout l'arbre | `app.js › runSearch › searchAll` |
 | 11.4 | Recherche dans les notes | Option "Inclure les notes" — cherche dans le HTML Quill (texte brut) | `app.js › matchTask` |
-| 11.9b | Bandeau options sous topbar | Les cases à cocher (tous niveaux / notes) sont dans un bandeau `#searchOptions` affiché **sous la topbar** uniquement quand la recherche est active (`showSearch` retire `hidden`, `closeSearch` le remet). Invisible au repos → plus de place dans la topbar sur mobile. | `app.js › showSearch / closeSearch`, `index.html › #searchOptions`, `style.css › #searchOptions` |
+| 11.9b | Bandeau options sous topbar | Cases à cocher dans un bandeau `#searchOptions` affiché sous la topbar dès que le champ reçoit le focus (listener `focus`) OU qu'une recherche est active. `closeSearch` le masque et décoche les filtres urgence. | `app.js › showSearch / closeSearch / searchInput focus`, `index.html › #searchOptions` |
 | 11.5 | Affichage du chemin | Chaque résultat montre son chemin d'appartenance (ex: `Projet › Sprint`) | `app.js › buildTaskItem › pathSpan` |
-| 11.6 | Hint de résultats | Nombre de résultats + scope affiché sous le champ | `app.js › runSearch › searchHint` |
+| 11.6 | Hint de résultats | Nombre de résultats + filtres actifs affichés sous le champ | `app.js › runSearch › searchHint` |
 | 11.7 | Mode searchResultMode | Pas de drag intra-liste, navigation vers la tâche dans l'arbre au clic 📋 | `app.js › buildTaskItem / noteIcon` |
-| 11.8 | Fermeture | Bouton ✕ ou champ vidé → retour à la vue précédente | `app.js › closeSearch` |
+| 11.8 | Fermeture | Bouton ✕, champ vidé + filtres décochés → retour à la vue précédente + reset filtres urgence | `app.js › closeSearch` |
 | 11.9 | Mise à jour après déplacement | `runSearch()` relancé après un drop ou une suppression en mode recherche | `app.js › performTreeDrop / del click` |
+| 11.10 | Filtre 🔴 Urgentes | Case `#searchUrgent` : filtre les tâches dont `taskUrgencyClass` = `'task-urgent'`. Utilisable sans texte (parcourt tous les niveaux). | `app.js › runSearch › filterUrg` |
+| 11.11 | Filtre 🟠 Importantes | Case `#searchWarning` : filtre les tâches dont `taskUrgencyClass` = `'task-warning'`. Utilisable sans texte. | `app.js › runSearch › filterWarn` |
+| 11.12 | Combinaison texte + urgence | Texte seul → scope respecte l'option "tous niveaux". Urgence seule → toujours tous les niveaux + `collectAllTasksFlat`. Texte + urgence → intersection (résultats textuels filtrés par couleur). | `app.js › runSearch` |
+| 11.13 | Union 🔴 + 🟠 | Quand les deux filtres sont cochés : union (urgent **OU** warning) — plus utile que l'intersection qui serait toujours vide. | `app.js › runSearch` |
+| 11.14 | `collectAllTasksFlat` | Collecte récursive de toutes les tâches (sans filtre texte) avec `_path`. Utilisée quand un filtre urgence est actif sans texte. | `app.js › collectAllTasksFlat` |
 
 ---
 
@@ -306,7 +311,7 @@ Comportements selon le timing d'appui :
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14b.1 | Titre "Tâches" supprimé | Le `<h1>Tâches</h1>` de la vue liste a été retiré pour gagner de la place, en particulier sur smartphone. L'identité de l'app est assurée par "MtM" dans la topbar. | `index.html` |
-| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.4.0'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
+| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.5.0'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
 | 14b.3 | Version affichée dans la modale sync | Pied de modale `#syncVersion` (toujours visible, que la sync soit activée ou non). Style monospace discret. | `index.html / style.css / app.js` |
 
 ---
@@ -340,8 +345,8 @@ Comportements selon le timing d'appui :
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — 81 assertions, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION` | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — 108 assertions, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection) | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes
