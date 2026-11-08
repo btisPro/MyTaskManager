@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.0.2';
+const APP_VERSION = 'v1.0.4';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
@@ -2689,14 +2689,18 @@ function initTouchDrag(containerEl, getTasksFn) {
 
   // ── touchstart sur containerEl ────────────────────────────────────────────
   //
-  // { passive: false } est OBLIGATOIRE pour deux raisons :
-  //   1. Autoriser e.preventDefault() ici empêche le click synthétique mobile.
-  //      Sur Android, appuyer longtemps déclenche un "contextmenu" natif et/ou
-  //      un "click" fantôme ~300ms après touchend. e.preventDefault() au
-  //      touchstart supprime ces événements synthétiques.
-  //   2. Permet à touchmove (attaché sur document en passive:false) de bloquer
-  //      le scroll natif. Certains navigateurs ignorent preventDefault() dans
-  //      touchmove si le touchstart correspondant n'était pas cancelable.
+  // { passive: false } est OBLIGATOIRE pour permettre à onMove (attaché sur
+  // document avec { passive: false }) d'appeler e.preventDefault() afin de
+  // bloquer le scroll natif pendant le drag. Certains navigateurs mobiles
+  // ignorent preventDefault() dans touchmove si le touchstart correspondant
+  // n'était pas déclaré comme non-passif.
+  //
+  // IMPORTANT : on N'appelle PAS e.preventDefault() ici.
+  // Sur iOS Safari, preventDefault() dans touchstart bloque tous les
+  // touchmove/touchend ultérieurs — le drag devient impossible.
+  // Sur Android, il bloque aussi les taps normaux (scroll, clic sur tâche).
+  // La protection contre le "click fantôme" post-long-press est assurée
+  // uniquement par le flag _suppressNextClick dans le handler document click.
   containerEl.addEventListener('touchstart', (e) => {
     // Identifie la tâche touchée via event delegation
     const li = e.target.closest('.task-item');
@@ -2707,12 +2711,6 @@ function initTouchDrag(containerEl, getTasksFn) {
     // (📋 détail, ✕ supprimer). Sans cette exclusion, appuyer sur ces
     // contrôles déclencherait le long press au lieu de leur comportement natif.
     if (e.target.closest('button, a, input, select, .task-detail-btn, .task-delete')) return;
-
-    // Prévenir le "contextmenu" natif Android (menu "copier/coller") et
-    // les clicks synthétiques post-touchend. Sans ça, Android Chrome affiche
-    // son propre menu contextuel en plus du nôtre, ou ferme notre menu
-    // immédiatement via le click fantôme.
-    e.preventDefault();
 
     cleanup(); // nettoie tout cycle précédent non terminé (robustesse)
 

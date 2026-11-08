@@ -801,20 +801,42 @@ describe('Guard click fantôme — _suppressNextClick (mobile)', () => {
   );
 });
 
-describe('e.preventDefault() dans touchstart (mobile anti-click fantôme)', () => {
+describe('Pas de e.preventDefault() dans touchstart — règle critique iOS/Android', () => {
   /*
-   * Sur Android Chrome, ne pas appeler e.preventDefault() dans touchstart
-   * laisse le navigateur générer un "contextmenu" natif et/ou un click synthétique
-   * après l'appui long. Ces événements parasites interferaient avec notre menu.
-   * e.preventDefault() dans touchstart { passive: false } les supprime.
+   * RÉGRESSION CONNUE (v1.0.2) : e.preventDefault() dans touchstart cassait
+   * tout le touch sur iOS Safari (bloque touchmove/touchend) et Android Chrome
+   * (bloque scroll + taps). Ce test vérifie que cette erreur n'est pas réintroduite.
+   *
+   * La protection contre le click fantôme est assurée UNIQUEMENT par le flag
+   * _suppressNextClick dans le handler document click — ce mécanisme suffit
+   * et n'a pas d'effet de bord sur les events touch.
+   *
+   * La seule utilisation correcte de e.preventDefault() dans le système touch
+   * est dans onMove, uniquement quand canDrag=true (bloque le scroll pendant le drag).
    */
   const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 
-  // On cherche e.preventDefault() dans le touchstart de initTouchDrag
-  // (après le commentaire de la fonction, avant attachDocHandlers)
+  // Extrait le corps du touchstart (entre 'touchstart', (e) => { et }, { passive: false })
+  // On vérifie que e.preventDefault() n'apparaît PAS dans ce bloc.
+  // Pattern : on cherche la zone touchstart → cleanup() (qui vient juste après).
+  // Si e.preventDefault() apparaît entre 'touchstart' et 'cleanup()' dans initTouchDrag,
+  // c'est la régression.
+  const touchstartBlock = src.match(/containerEl\.addEventListener\('touchstart'[\s\S]{0,3000}?,\s*\{\s*passive:\s*false\s*\}\)/);
+  if (touchstartBlock) {
+    const block = touchstartBlock[0];
+    // e.preventDefault() ne doit pas être dans le bloc touchstart
+    assert(
+      !block.includes('e.preventDefault()'),
+      'e.preventDefault() absent du touchstart (régression iOS/Android évitée)'
+    );
+    // e.preventDefault() doit être présent dans onMove (bloque scroll pendant drag)
+    // On le vérifie séparément dans le corps complet de initTouchDrag
+  }
+
+  // Vérifie que e.preventDefault() est bien présent dans onMove (drag actif → bloque scroll)
   assert(
-    /touchstart[\s\S]{0,2000}e\.preventDefault\(\)[\s\S]{0,500}cleanup\(\)/.test(src),
-    'e.preventDefault() appelé dans le touchstart de initTouchDrag'
+    /canDrag[\s\S]{0,50}e\.preventDefault\(\)/.test(src),
+    'e.preventDefault() présent dans onMove uniquement quand canDrag=true (correct)'
   );
 });
 
