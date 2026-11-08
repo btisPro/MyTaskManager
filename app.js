@@ -813,6 +813,16 @@ function showList() {
  * - affiche la liste des sous-tâches
  * @param {Task} task
  */
+// ── Références des handlers vivants pour detailMeta ──────────────────────────
+// Ces variables stockent les fonctions de handler actuellement attachées aux
+// éléments du bloc importance/date. On les garde en dehors de showDetail pour
+// pouvoir les retirer (removeEventListener) avant d'en attacher de nouveaux.
+// C'est l'alternative sûre au cloneNode : les nœuds DOM restent stables,
+// seules les fonctions callback changent à chaque ouverture de tâche.
+let _detailImpHandler   = null;
+let _detailDateHandler  = null;
+let _detailClearHandler = null;
+
 function showDetail(task) {
   listView.classList.add('hidden');
   detailView.classList.remove('hidden');
@@ -822,44 +832,46 @@ function showDetail(task) {
   detailTitle.title = 'Cliquer pour modifier le titre';
 
   // ── Champs importance et date d'échéance ─────────────────────────────────
-  // Chargement des valeurs courantes de la tâche
+  // On retire le handler précédent avant d'en attacher un nouveau.
+  // Cela évite l'accumulation de listeners sans avoir recours à cloneNode
+  // (qui détachait les nœuds du DOM et cassait les références constantes).
+  if (_detailImpHandler)   detailImportance.removeEventListener('change', _detailImpHandler);
+  if (_detailDateHandler)  detailDueDate.removeEventListener('change',    _detailDateHandler);
+  if (_detailClearHandler) detailDueDateClear.removeEventListener('click', _detailClearHandler);
+
+  // Charge les valeurs courantes de la tâche dans les champs
   detailImportance.value = task.importance || 'low';
   detailDueDate.value    = task.dueDate    || '';
 
-  // Sauvegarde immédiate à chaque modification du sélecteur d'importance.
-  // On remplace le listener précédent en clonant l'élément (évite l'accumulation
-  // de listeners si showDetail est appelé plusieurs fois sur des tâches différentes).
-  const impClone = detailImportance.cloneNode(true);
-  detailImportance.parentNode.replaceChild(impClone, detailImportance);
-  // Après le cloneNode, on doit récupérer la référence depuis le DOM car la
-  // constante `detailImportance` pointe toujours vers l'ancien nœud.
-  // On utilise directement l'élément cloné via une variable locale.
-  impClone.addEventListener('change', () => {
-    task.importance = impClone.value;
+  // Nouveau handler importance : capture `task` via closure.
+  // Chaque appel à showDetail crée une nouvelle closure sur la bonne tâche.
+  _detailImpHandler = () => {
+    task.importance = detailImportance.value;
     touchUpdatedAt(task.id);
     saveTasks();
-    // Rafraîchit la liste visible pour mettre à jour la couleur immédiatement
+    // Rafraîchit la liste visible pour appliquer la nouvelle couleur immédiatement
     _refreshCurrentList();
-  });
+  };
+  detailImportance.addEventListener('change', _detailImpHandler);
 
-  const dateClone = detailDueDate.cloneNode(true);
-  detailDueDate.parentNode.replaceChild(dateClone, detailDueDate);
-  dateClone.addEventListener('change', () => {
-    task.dueDate = dateClone.value;
+  // Nouveau handler date d'échéance
+  _detailDateHandler = () => {
+    task.dueDate = detailDueDate.value;
     touchUpdatedAt(task.id);
     saveTasks();
     _refreshCurrentList();
-  });
+  };
+  detailDueDate.addEventListener('change', _detailDateHandler);
 
-  const clearClone = detailDueDateClear.cloneNode(true);
-  detailDueDateClear.parentNode.replaceChild(clearClone, detailDueDateClear);
-  clearClone.addEventListener('click', () => {
-    dateClone.value = '';
+  // Nouveau handler bouton ✕ (efface la date)
+  _detailClearHandler = () => {
+    detailDueDate.value = '';
     task.dueDate = '';
     touchUpdatedAt(task.id);
     saveTasks();
     _refreshCurrentList();
-  });
+  };
+  detailDueDateClear.addEventListener('click', _detailClearHandler);
 
   // Charge les notes dans Quill (en mode silencieux pour ne pas déclencher l'auto-save)
   currentNoteTaskId = task.id;
@@ -946,10 +958,15 @@ function setupDetailDrag() {
   }
 
   detailView.addEventListener('dragstart', (e) => {
-    // Si le drag vient d'un li de sous-tâche ou d'un champ de saisie,
-    // on laisse leur propre dragstart gérer l'événement sans l'annuler
+    // Si le drag vient d'un li de sous-tâche, on laisse son propre dragstart gérer.
     if (e.target.closest('.task-item')) return;
-    if (e.target.closest('.ql-editor, input, textarea, button')) {
+
+    // Interdit le drag depuis tout champ interactif : éditeur Quill, inputs texte,
+    // textarea, boutons, et en particulier le bloc #detailMeta (select importance,
+    // input date, bouton ✕). Sans cette exclusion, l'input[type=date] est draggable
+    // par défaut dans certains navigateurs et déclenche ce handler au lieu de son
+    // comportement natif, cassant à la fois le sélecteur de date et le drag des li.
+    if (e.target.closest('.ql-editor, input, textarea, button, select, .detail-meta')) {
       e.preventDefault();
       return;
     }
@@ -2462,7 +2479,11 @@ function initTouchDrag(containerEl, getTasksFn) {
   containerEl.addEventListener('touchstart', (e) => {
     const li = e.target.closest('.task-item');
     if (!li) return;
-    if (e.target.closest('button, a, input, .task-detail-btn, .task-delete')) return;
+    // On n'intercepte pas les touches sur des contrôles interactifs natifs
+    // (boutons, liens, champs texte, sélecteurs) pour ne pas bloquer leur
+    // comportement natif. Sans "select", le <select> importance dans #detailMeta
+    // ne recevrait pas l'événement tap et refuserait d'ouvrir son menu déroulant.
+    if (e.target.closest('button, a, input, select, .task-detail-btn, .task-delete')) return;
 
     cleanup(); // nettoie un cycle précédent non terminé (sécurité)
 
