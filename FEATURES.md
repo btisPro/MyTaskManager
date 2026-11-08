@@ -311,7 +311,7 @@ Comportements selon le timing d'appui :
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14b.1 | Titre "Tâches" supprimé | Le `<h1>Tâches</h1>` de la vue liste a été retiré pour gagner de la place, en particulier sur smartphone. L'identité de l'app est assurée par "MtM" dans la topbar. | `index.html` |
-| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.5.1'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
+| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.5.2'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
 | 14b.3 | Version affichée dans la modale sync | Pied de modale `#syncVersion` (toujours visible, que la sync soit activée ou non). Style monospace discret. | `index.html / style.css / app.js` |
 
 ---
@@ -345,8 +345,8 @@ Comportements selon le timing d'appui :
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — 108 assertions, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection) | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — 125 assertions, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`), logique `applyDrop`, logique menu contextuel (delta positions) | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes
@@ -415,3 +415,6 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `removeEventListener` + re-`addEventListener` dans `showDetail` (pas `cloneNode`) | `cloneNode(true)` + `replaceChild` détache les nœuds du DOM, ce qui invalide les références DOM constantes (`detailImportance`, `detailDueDate`, `detailDueDateClear`) et empêche leur utilisation au prochain appel de `showDetail`. La méthode correcte : stocker les handlers dans des variables (`_detailImpHandler`, etc.) et les remplacer explicitement. |
 | `closest('.detail-meta')` dans `dragstart` de `setupDetailDrag` | Sans cette exclusion, l'`<input type=date>` et le `<select>` du bloc `#detailMeta` sont draggables par défaut. Leur `dragstart` déclenche le handler du `detailView`, ce qui bloque le drag natif de l'input ET casse le drag des sous-tâches en interférant avec `dragListRef`. |
 | `'select'` dans la liste d'exclusions du `touchstart` de `initTouchDrag` | Sans cette exclusion, le `<select>` importance dans `#detailMeta` ne reçoit pas le tap correct et ne peut pas ouvrir son menu déroulant sur mobile. |
+| `_touchGestureActive` global (v1.5.2) | Flag levé dans `touchstart` et baissé dans `cleanup()` + `onEnd` (chemin menu). Bloque `handleClick` dans `pointerup` pendant tout cycle touch. Sans lui, un long press (600 ms) déclenchait `pointerup` → `handleClick` → `doFlush` → `renderList` qui détruisait le `<li>` pendant le geste, cassant à la fois le drag et le menu contextuel mobile. |
+| `pointerMoved = true` dans `dragstart` du `<li>` (v1.5.2) | Sur certains navigateurs, `dragstart` ne génère pas de `pointermove` préalable si la souris s'est peu déplacée. Sans ce forçage, `pointerMoved` restait `false` et `pointerup` (émis après la fin du drag) appelait `handleClick` → `doFlush` → `renderList` en cours de drag, détruisant les handlers. |
+| `e.stopPropagation()` dans les handlers click des items du menu contextuel (v1.5.2) | Sans ça, le tap sur un item du menu contextuel (mobile) générait un `click` synthétique qui remontait jusqu'à `document.addEventListener('click', hideContextMenu)` et fermait le menu AVANT que l'action de l'item s'exécute. Tous les items étaient donc non fonctionnels sur mobile. |

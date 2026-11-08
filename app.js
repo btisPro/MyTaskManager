@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.5.1';
+const APP_VERSION = 'v1.5.2';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
@@ -300,6 +300,15 @@ const treeCollapsed = JSON.parse(localStorage.getItem('treeCollapsed') || '{}');
 
 /** Id de la tâche actuellement surlignée dans l'arbre de la sidebar. */
 let activeTreeTaskId = null;
+
+/**
+ * Flag global levé par initTouchDrag dès qu'un cycle touch est en cours
+ * (touchstart reçu, cleanup non encore appelé). Permet à buildTaskItem de
+ * bloquer handleClick dans pointerup : sur mobile, pointerup est émis à la
+ * fin du touch même après un long press, et sans ce guard il déclencherait
+ * handleClick → doFlush → renderList → destruction du DOM pendant le geste.
+ */
+let _touchGestureActive = false;
 
 /**
  * Id de la tâche en cours de drag DEPUIS l'arbre (drag intra-arbre).
@@ -1117,7 +1126,12 @@ function showContextMenu(e, task, tasks, listEl) {
     const li = document.createElement('li');
     li.className = 'ctx-item';
     li.textContent = label;
-    li.addEventListener('click', () => {
+    li.addEventListener('click', (e) => {
+      // stopPropagation empêche le click de remonter jusqu'à
+      // document.addEventListener('click', hideContextMenu) qui fermerait
+      // le menu AVANT que ce handler ait le temps d'exécuter l'action.
+      // Sans ça, sur mobile, le tap sur un item ferme le menu sans rien faire.
+      e.stopPropagation();
       hideContextMenu();
       // Retrouve le vrai tableau parent (en mode recherche, `tasks` est un tableau
       // de résultats temporaire — pas le vrai parent de la tâche)
@@ -1317,7 +1331,17 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   textWrap.addEventListener('pointerdown', () => { pointerMoved = false; });
   textWrap.addEventListener('pointermove', () => { pointerMoved = true; });
   textWrap.addEventListener('pointerup', (e) => {
-    if (!pointerMoved && e.button === 0) handleClick(task.id, getList, listEl);
+    // Double protection contre le déclenchement intempestif de handleClick :
+    //
+    // 1. pointerMoved : si le pointeur a bougé, c'est un drag pas un clic.
+    //
+    // 2. _touchGestureActive : sur mobile, pointerup est émis à la fin du
+    //    toucher MÊME après un long press (600 ms). Sans ce flag, handleClick
+    //    serait appelé après chaque long press, reconstruisant le DOM via
+    //    doFlush/renderList et détruisant le <li> sur lequel le geste porte.
+    //    Ce flag est levé par initTouchDrag dès le touchstart et baissé par cleanup().
+    if (pointerMoved || _touchGestureActive) return;
+    if (e.button === 0) handleClick(task.id, getList, listEl);
   });
 
   // Menu contextuel au clic droit (desktop)
@@ -1347,6 +1371,13 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   // ── Drag & Drop ───────────────────────────────────────
   // dragstart : toujours actif (drag vers l'arbre possible même en mode recherche)
   li.addEventListener('dragstart', function(e) {
+    // On force pointerMoved = true pour que pointerup (qui peut arriver après
+    // la fin du drag sur certains navigateurs) ne déclenche pas handleClick.
+    // Sans ça, un drag court (mousedown → minuscule déplacement → dragstart →
+    // mouseup) peut ne pas avoir émis de pointermove, laissant pointerMoved à
+    // false, et handleClick appellerait doFlush → renderList en cours de drag.
+    pointerMoved = true;
+
     this.classList.add('dragging');
     document.body.classList.add('dragging-active');
     e.dataTransfer.effectAllowed = 'move';
@@ -2512,6 +2543,9 @@ function initTouchDrag(containerEl, getTasksFn) {
     canDrag      = false;
     touchSrcTask = null;
     touchSrcList = null;
+    // Baisse le flag global : le prochain pointerup pourra de nouveau déclencher
+    // handleClick si l'utilisateur fait un vrai tap court sans geste en cours.
+    _touchGestureActive = false;
   }
 
   // ── Handlers document ─────────────────────────────────────
@@ -2565,9 +2599,12 @@ function initTouchDrag(containerEl, getTasksFn) {
       // Remet juste le strict minimum à zéro (le menu se fermera seul)
       clearTimeout(longPressTimer);  longPressTimer  = null;
       clearTimeout(scrollBailTimer); scrollBailTimer = null;
-      mayScroll    = true;
-      touchSrcTask = null;
-      touchSrcList = null;
+      mayScroll           = true;
+      touchSrcTask        = null;
+      touchSrcList        = null;
+      // On baisse le flag ici aussi : le doigt est levé, le geste est terminé.
+      // Le prochain tap court pourra de nouveau déclencher handleClick.
+      _touchGestureActive = false;
       return;
     }
     cleanup();
@@ -2600,6 +2637,11 @@ function initTouchDrag(containerEl, getTasksFn) {
     if (e.target.closest('button, a, input, select, .task-detail-btn, .task-delete')) return;
 
     cleanup(); // nettoie un cycle précédent non terminé (sécurité)
+
+    // Lève le flag global IMMÉDIATEMENT après cleanup() :
+    // dès ce moment, tout pointerup sur textWrap doit être ignoré par handleClick
+    // pour éviter que le DOM soit reconstruit pendant le geste en cours.
+    _touchGestureActive = true;
 
     const touch = e.touches[0];
     startX = touch.clientX; startY = touch.clientY;

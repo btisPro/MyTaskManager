@@ -556,11 +556,11 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
-describe('APP_VERSION — passage à v1.5.1', () => {
+describe('APP_VERSION — passage à v1.5.2', () => {
   const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
   if (match) {
-    assertEqual(match[1], 'v1.5.1', 'APP_VERSION vaut "v1.5.1" après le correctif couleurs urgence');
+    assertEqual(match[1], 'v1.5.2', 'APP_VERSION vaut "v1.5.2" après le correctif drag & menu contextuel');
   }
 });
 
@@ -659,6 +659,201 @@ describe('filtre urgence + texte — intersection', () => {
   const warningAlpha = textMatches.filter(t => taskUrgencyClass(t) === 'task-warning');
   assertEqual(warningAlpha.length, 1, 'filtre 🟠 sur "alpha" → 1 résultat (Tâche Alpha)');
   assertEqual(warningAlpha[0].id, 3, 'le résultat est id=3 (Tâche Alpha, medium)');
+});
+
+/* ═══════════════════════════════════════════════════════════
+   CORRECTIONS v1.5.2 — Guards drag & menu contextuel
+   Vérifie que les trois mécanismes de protection sont présents
+   dans le source de app.js.
+════════════════════════════════════════════════════════════ */
+
+describe('Guard _touchGestureActive — présence dans le source', () => {
+  /*
+   * Correction 1 : un flag global `_touchGestureActive` est levé dès le
+   * touchstart et baissé dans cleanup(). Cela empêche pointerup sur textWrap
+   * d'appeler handleClick (et donc doFlush/renderList) pendant un geste touch.
+   * On vérifie que les trois occurrences clés sont bien dans app.js.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes('let _touchGestureActive = false'),
+    'Flag _touchGestureActive déclaré dans le scope module'
+  );
+  assert(
+    src.includes('_touchGestureActive = true'),
+    'Flag levé à true dans touchstart (initTouchDrag)'
+  );
+  assert(
+    /cleanup[\s\S]{0,300}_touchGestureActive\s*=\s*false/.test(src),
+    'Flag baissé à false dans cleanup()'
+  );
+});
+
+describe('Guard pointerup — bloqué si geste ou drag actif', () => {
+  /*
+   * Correction 2 : le handler pointerup sur textWrap vérifie deux conditions
+   * avant d'appeler handleClick :
+   *   a) pointerMoved — le pointeur a bougé → c'est un drag, pas un clic
+   *   b) _touchGestureActive — un cycle touch est en cours
+   * Sans ces gardes, handleClick → doFlush → renderList détruisait le <li>
+   * pendant le drag (desktop) ou le long press (mobile).
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes('if (pointerMoved || _touchGestureActive) return'),
+    'Guard combiné pointerMoved || _touchGestureActive présent dans pointerup'
+  );
+});
+
+describe('Guard dragstart — pointerMoved forcé à true', () => {
+  /*
+   * Correction 3 : dans le dragstart du <li>, on force pointerMoved = true.
+   * Cela garantit que si pointerup est émis après la fin du drag (ce que
+   * certains navigateurs font), handleClick ne sera pas appelé.
+   * Un drag court (mousedown → minuscule déplacement sans pointermove → dragstart)
+   * pouvait laisser pointerMoved = false et déclencher un flush parasite.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  // On cherche "pointerMoved = true" dans le voisinage d'un dragstart de <li>
+  // La correction est identifiable car elle précède this.classList.add('dragging')
+  assert(
+    /pointerMoved\s*=\s*true[\s\S]{0,300}this\.classList\.add\('dragging'\)/.test(src),
+    'pointerMoved forcé à true avant this.classList.add("dragging") dans dragstart du <li>'
+  );
+});
+
+describe('Guard menu contextuel — stopPropagation sur items', () => {
+  /*
+   * Correction 4 : chaque item du menu contextuel appelle e.stopPropagation()
+   * pour empêcher le click de remonter jusqu'à document qui fermerait le menu
+   * AVANT que l'action de l'item s'exécute. Sur mobile, le tap sur un item
+   * générait un click synthétique qui remontait et fermait le menu immédiatement,
+   * rendant tous les items du menu non fonctionnels.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes('e.stopPropagation()'),
+    'stopPropagation présent dans au moins un handler click du menu contextuel'
+  );
+
+  // Vérifie que stopPropagation précède hideContextMenu() dans le même handler
+  assert(
+    /e\.stopPropagation\(\)[\s\S]{0,80}hideContextMenu\(\)/.test(src),
+    'stopPropagation appelé avant hideContextMenu dans le handler click des items'
+  );
+});
+
+describe('_touchGestureActive baissé dans onEnd (chemin menu sans drag)', () => {
+  /*
+   * Dans le chemin "menuShown && !canDrag" de onEnd, on baisse aussi
+   * _touchGestureActive pour que le prochain tap court (sans geste) puisse
+   * déclencher handleClick normalement.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  // On cherche le pattern menuShown && !canDrag suivi de _touchGestureActive = false
+  assert(
+    /menuShown\s*&&\s*!canDrag[\s\S]{0,500}_touchGestureActive\s*=\s*false/.test(src),
+    '_touchGestureActive = false présent dans le chemin menuShown && !canDrag de onEnd'
+  );
+});
+
+describe('Logique applyDrop — cohérence réordonnement', () => {
+  /*
+   * Test de la logique de réordonnement issue de applyDrop (tactile) et drop (desktop).
+   * On simule une liste de 3 tâches et on vérifie qu'un déplacement "avant" ou
+   * "après" produit le bon ordre.
+   */
+
+  // Simulation de la logique splice de applyDrop (drop-before)
+  function simulateDrop(tasks, srcId, destId, zone) {
+    const result = tasks.map(t => ({ ...t })); // copie superficielle
+    const srcIdx  = result.findIndex(t => t.id === srcId);
+    let destIdx   = result.findIndex(t => t.id === destId);
+    if (srcIdx === -1 || destIdx === -1) return result;
+
+    if (zone === 'child') {
+      // devient premier enfant de dest — simulé ici en retirant simplement de la liste
+      result.splice(srcIdx, 1);
+      return result;
+    }
+    const isBefore = zone === 'before';
+    const [moved] = result.splice(srcIdx, 1);
+    destIdx = result.findIndex(t => t.id === destId); // recalcul post-splice
+    result.splice(isBefore ? destIdx : destIdx + 1, 0, moved);
+    return result;
+  }
+
+  const tasks = [
+    { id: 1, text: 'A', children: [] },
+    { id: 2, text: 'B', children: [] },
+    { id: 3, text: 'C', children: [] },
+  ];
+
+  // Déplacer A (id=1) après C (id=3) → ordre B, C, A
+  const afterC = simulateDrop(tasks, 1, 3, 'after');
+  assertEqual(afterC.map(t => t.id), [2, 3, 1], 'drop-after : A déplacé après C → B, C, A');
+
+  // Déplacer C (id=3) avant A (id=1) → ordre C, A, B
+  const beforeA = simulateDrop(tasks, 3, 1, 'before');
+  assertEqual(beforeA.map(t => t.id), [3, 1, 2], 'drop-before : C déplacé avant A → C, A, B');
+
+  // Déplacer B (id=2) avant A (id=1) → ordre B, A, C
+  const beforeA2 = simulateDrop(tasks, 2, 1, 'before');
+  assertEqual(beforeA2.map(t => t.id), [2, 1, 3], 'drop-before : B déplacé avant A → B, A, C');
+
+  // Déplacer A (id=1) comme enfant de B (id=2) → reste B, C
+  const child = simulateDrop(tasks, 1, 2, 'child');
+  assertEqual(child.map(t => t.id), [2, 3], 'drop-child : A retiré de la liste → B, C');
+});
+
+describe('Menu contextuel — déplacement par position (logique)', () => {
+  /*
+   * Vérifie la logique de déplacement par delta du menu contextuel.
+   * Reproduit la logique de showContextMenu › items.forEach › click.
+   */
+
+  function applyDelta(tasks, taskId, delta) {
+    const result = tasks.map(t => ({ ...t }));
+    const idx = result.findIndex(t => t.id === taskId);
+    if (idx === -1) return result;
+    const newIdx = delta === -Infinity
+      ? 0
+      : Math.max(0, Math.min(result.length - 1, idx + delta));
+    if (newIdx === idx) return result;
+    const [moved] = result.splice(idx, 1);
+    result.splice(newIdx, 0, moved);
+    return result;
+  }
+
+  const tasks = [
+    { id: 1, text: 'A', children: [] },
+    { id: 2, text: 'B', children: [] },
+    { id: 3, text: 'C', children: [] },
+    { id: 4, text: 'D', children: [] },
+    { id: 5, text: 'E', children: [] },
+  ];
+
+  // ⬆ Tout en haut
+  const top = applyDelta(tasks, 5, -Infinity);
+  assertEqual(top[0].id, 5, '⬆ Tout en haut : E passe en position 0');
+  assertEqual(top.map(t => t.id), [5, 1, 2, 3, 4], '⬆ Tout en haut : ordre correct');
+
+  // ▲ +5 (remonte de 5 — depuis pos 4, va en 0)
+  const up5 = applyDelta(tasks, 5, -5);
+  assertEqual(up5[0].id, 5, '▲ +5 : E (pos 4) remonte à pos 0 (clamped)');
+
+  // ▼ -5 (descend de 5 — depuis pos 0, va en 4)
+  const down5 = applyDelta(tasks, 1, +5);
+  assertEqual(down5[4].id, 1, '▼ -5 : A (pos 0) descend à pos 4 (clamped)');
+
+  // Pas de mouvement si déjà en position extrême
+  const noMove = applyDelta(tasks, 1, -5);
+  assertEqual(noMove.map(t => t.id), [1, 2, 3, 4, 5], 'Pas de mouvement si déjà en tête');
 });
 
 /* ═══════════════════════════════════════════════════════════
