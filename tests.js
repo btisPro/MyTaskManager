@@ -556,11 +556,11 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
-describe('APP_VERSION — passage à v1.5.0', () => {
+describe('APP_VERSION — passage à v1.5.1', () => {
   const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
   if (match) {
-    assertEqual(match[1], 'v1.5.0', 'APP_VERSION vaut "v1.5.0" après l\'ajout des filtres urgence');
+    assertEqual(match[1], 'v1.5.1', 'APP_VERSION vaut "v1.5.1" après le correctif couleurs urgence');
   }
 });
 

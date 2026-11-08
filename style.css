@@ -541,23 +541,49 @@ h2:hover { color: var(--accent); }
    Appliquées par taskUrgencyClass() dans buildTaskItem.
    ROUGE  : importance forte, ou échéance dépassée / dans ≤ 3 jours.
    ORANGE : importance moyenne, ou échéance dans 4–10 jours.
-   Les couleurs restent subtiles (fond et bordure gauche) pour ne pas
-   surcharger visuellement une longue liste de tâches. */
+
+   Choix des valeurs :
+   - Fond : couleur saturée mais pas trop sombre pour garder le texte lisible.
+     Rouge → #fee2e2 (Tailwind red-100) ; orange → #ffedd5 (Tailwind orange-100).
+     Ces teintes sont clairement visibles sans être agressives.
+   - Bordure périmétrique : ton plus soutenu que le fond pour délimiter proprement.
+   - Bordure gauche : 5px, couleur franche (red-500 / orange-500), sert de
+     signal couleur fort même en vision périphérique.
+   - Couleur du texte du rang (#N) : accordée à la couleur de la tâche pour
+     renforcer le code couleur sans surcharger. */
+
 .task-item.task-urgent {
-  background: #fff1f1;
-  border-color: #fca5a5;
-  border-left: 3px solid #ef4444;
+  background:  #fee2e2;          /* rouge clair saturé (Tailwind red-100) */
+  border-color: #fca5a5;         /* rouge moyen pour le contour (red-300) */
+  border-left: 5px solid #ef4444; /* rouge franc 5px (red-500) */
 }
+/* Teinte le numéro de rang en rouge pour renforcer le signal visuel */
+.task-item.task-urgent .task-rank {
+  color: #b91c1c;                /* red-700, lisible sur fond rouge clair */
+}
+
 .task-item.task-warning {
-  background: #fff8f0;
-  border-color: #fcd34d;
-  border-left: 3px solid #f97316;
+  background:  #ffedd5;          /* orange clair saturé (Tailwind orange-100) */
+  border-color: #fdba74;         /* orange moyen pour le contour (orange-300) */
+  border-left: 5px solid #f97316; /* orange franc 5px (orange-500) */
 }
-/* Priorité : drop-child > urgence (l'outline du drop doit toujours être visible) */
+/* Teinte le numéro de rang en orange pour renforcer le signal visuel */
+.task-item.task-warning .task-rank {
+  color: #c2410c;                /* orange-700, lisible sur fond orange clair */
+}
+
+/* Priorité : drop-child > urgence.
+   Pendant un drag, l'outline bleu du drop-child doit toujours être visible
+   et primer sur la coloration urgence, pour ne pas désorienter l'utilisateur. */
 .task-item.drop-child.task-urgent,
 .task-item.drop-child.task-warning {
-  background: #eef2ff;
+  background:   #eef2ff;
   border-color: var(--accent);
+}
+/* Rétablit la couleur de rang par défaut pendant le drop (sinon reste rouge/orange) */
+.task-item.drop-child.task-urgent .task-rank,
+.task-item.drop-child.task-warning .task-rank {
+  color: var(--muted);
 }
 
 /* Tâche source pendant un drag tactile : réduite en opacité */
