@@ -934,6 +934,163 @@ describe('Menu contextuel — déplacement par position (logique)', () => {
   assertEqual(noMove.map(t => t.id), [1, 2, 3, 4, 5], 'Pas de mouvement si déjà en tête');
 });
 
+describe('Nouveaux éléments DOM dans buildTaskItem — poignée et bouton menu', () => {
+  /*
+   * Vérifie que buildTaskItem crée bien les deux nouveaux éléments :
+   *   - .task-drag-handle : poignée de drag tactile (chemin A)
+   *   - .task-menu-btn    : bouton ⋮ d'accès au menu contextuel
+   * Ces éléments sont indispensables à la nouvelle architecture UX mobile.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes("dragHandle.className = 'task-drag-handle'"),
+    '.task-drag-handle créé dans buildTaskItem'
+  );
+  assert(
+    src.includes("menuBtn.className = 'task-menu-btn'"),
+    '.task-menu-btn créé dans buildTaskItem'
+  );
+  assert(
+    src.includes('li.appendChild(dragHandle)'),
+    'dragHandle appendé au <li>'
+  );
+  assert(
+    src.includes('li.appendChild(menuBtn)'),
+    'menuBtn appendé au <li>'
+  );
+  assert(
+    /dragHandle[\s\S]{0,30}rank[\s\S]{0,30}textWrap/.test(src) ||
+    /li\.appendChild\(dragHandle\)[\s\S]{0,30}li\.appendChild\(rank\)/.test(src),
+    'Ordre des enfants : dragHandle avant rank dans buildTaskItem'
+  );
+  assert(
+    /li\.appendChild\(menuBtn\)[\s\S]{0,30}li\.appendChild\(del\)/.test(src),
+    'Ordre des enfants : menuBtn avant del dans buildTaskItem'
+  );
+});
+
+describe('Handler click de menuBtn — stopPropagation + showContextMenu', () => {
+  /*
+   * Le bouton ⋮ doit :
+   *   1. Appeler e.stopPropagation() pour ne pas remonter vers document click
+   *      (qui fermerait le menu immédiatement).
+   *   2. Appeler showContextMenu() avec les coordonnées du bouton.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes("menuBtn.addEventListener('click'"),
+    "menuBtn a un listener 'click'"
+  );
+  assert(
+    /menuBtn\.addEventListener\('click'[\s\S]{0,200}stopPropagation/.test(src),
+    'stopPropagation appelé dans le handler click de menuBtn'
+  );
+  assert(
+    /menuBtn\.addEventListener\('click'[\s\S]{0,300}showContextMenu/.test(src),
+    'showContextMenu appelé depuis le handler click de menuBtn'
+  );
+});
+
+describe('Chemin A (poignée) — dragFromHandle et démarrage immédiat', () => {
+  /*
+   * La nouvelle variable dragFromHandle distingue les deux chemins dans initTouchDrag.
+   * Chemin A (poignée ⠿) : drag immédiat via startDrag(), sans longPressTimer.
+   * Chemin B (zone texte) : logique long press inchangée.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes('let dragFromHandle  = false'),
+    'Variable dragFromHandle déclarée dans initTouchDrag'
+  );
+  assert(
+    src.includes('dragFromHandle = true'),
+    'dragFromHandle posé à true dans le chemin A (poignée)'
+  );
+  assert(
+    src.includes('dragFromHandle = false'),
+    'dragFromHandle posé à false dans le chemin B (long press) et cleanup'
+  );
+  assert(
+    src.includes("e.target.closest('.task-drag-handle')") &&
+    src.includes('dragFromHandle = true'),
+    'Chemin A déclenché quand e.target.closest(".task-drag-handle")'
+  );
+  assert(
+    /dragFromHandle\s*=\s*true[\s\S]{0,50}startDrag\(\)/.test(src),
+    'startDrag() appelé immédiatement après dragFromHandle = true (chemin A)'
+  );
+  assert(
+    /if\s*\(dragFromHandle\)\s*return/.test(src),
+    'Guard "if (dragFromHandle) return" dans onMove pour ignorer les onMove initiaux'
+  );
+});
+
+describe('Exclusions touchstart — .task-menu-btn exclu, .task-drag-handle non exclu', () => {
+  /*
+   * .task-menu-btn : a son propre handler click → doit être dans les exclusions de
+   *   touchstart pour ne pas déclencher le long press quand on tape sur ⋮.
+   * .task-drag-handle : NE doit PAS être exclu — c'est lui qui déclenche le chemin A.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes('.task-menu-btn'),
+    '.task-menu-btn présent dans les exclusions du touchstart'
+  );
+
+  // La liste d'exclusions ne doit pas inclure .task-drag-handle
+  // On cherche le bloc isInteractive et on vérifie l'absence de task-drag-handle dedans
+  const exclusionMatch = src.match(/const isInteractive\s*=\s*e\.target\.closest\(\s*([\s\S]{0,300}?)\)/);
+  if (exclusionMatch) {
+    assert(
+      !exclusionMatch[1].includes('task-drag-handle'),
+      '.task-drag-handle absent de la liste isInteractive (ne doit pas être exclu du touchstart)'
+    );
+    assert(
+      exclusionMatch[1].includes('task-menu-btn'),
+      '.task-menu-btn présent dans la liste isInteractive'
+    );
+  } else {
+    assert(false, 'Bloc isInteractive introuvable dans touchstart');
+  }
+});
+
+describe('touch-action:none sur .task-drag-handle dans style.css', () => {
+  /*
+   * touch-action: none sur la poignée est indispensable pour que le navigateur
+   * mobile ne tente pas de gérer ce touch comme un scroll ou un pan.
+   * Sans ça, le touchmove sur la poignée peut ne pas être transmis à onMove.
+   * Important : NE PAS mettre touch-action: none sur .task-item (bloquerait le scroll).
+   */
+  const css = fs.readFileSync(path.join(__dirname, 'style.css'), 'utf8');
+
+  assert(
+    /\.task-drag-handle\s*\{[\s\S]{0,200}touch-action:\s*none/.test(css),
+    'touch-action: none présent dans .task-drag-handle (style.css)'
+  );
+  assert(
+    css.includes('.task-drag-handle'),
+    '.task-drag-handle défini dans style.css'
+  );
+  assert(
+    css.includes('.task-menu-btn'),
+    '.task-menu-btn défini dans style.css'
+  );
+  assert(
+    /pointer:\s*fine[\s\S]{0,300}task-drag-handle[\s\S]{0,100}opacity:\s*0/.test(css) ||
+    /pointer:\s*fine[\s\S]{0,300}\.task-drag-handle,[\s\S]{0,100}opacity:\s*0/.test(css),
+    'Desktop (pointer:fine) : task-drag-handle caché au repos (opacity:0)'
+  );
+  assert(
+    /pointer:\s*coarse[\s\S]{0,200}task-drag-handle[\s\S]{0,100}opacity:\s*1/.test(css) ||
+    /pointer:\s*coarse[\s\S]{0,200}\.task-drag-handle,[\s\S]{0,100}opacity:\s*1/.test(css),
+    'Mobile (pointer:coarse) : task-drag-handle toujours visible (opacity:1)'
+  );
+});
+
 /* ═══════════════════════════════════════════════════════════
    BILAN
 ════════════════════════════════════════════════════════════ */

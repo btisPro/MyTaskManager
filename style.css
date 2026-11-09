@@ -699,6 +699,50 @@ h2:hover { color: var(--accent); }
 .task-delete:hover { color: #ef4444; background: #fee2e2; }
 .task-delete:active { background: #fecaca; }
 
+.task-drag-handle {
+  font-size: 1rem;
+  color: #bbb;
+  cursor: grab;
+  padding: 0 3px;
+  flex-shrink: 0;
+  line-height: 1;
+  touch-action: none;
+  user-select: none;
+}
+.task-drag-handle:active { cursor: grabbing; color: var(--accent); }
+
+.task-menu-btn {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  color: #bbb;
+  cursor: pointer;
+  padding: 0 3px;
+  line-height: 1;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 28px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.task-menu-btn:hover { color: var(--accent); background: var(--accent-light); }
+.task-menu-btn:active { background: #ddd6fe; }
+
+@media (pointer: fine) {
+  .task-drag-handle,
+  .task-menu-btn { opacity: 0; transition: opacity 0.15s; }
+  .task-item:hover .task-drag-handle,
+  .task-item:hover .task-menu-btn { opacity: 1; }
+}
+
+@media (pointer: coarse) {
+  .task-drag-handle,
+  .task-menu-btn { opacity: 1; }
+}
+
 .task-list > .task-item:nth-child(1) { border-left: 4px solid #f59e0b; }
 .task-list > .task-item:nth-child(2) { border-left: 4px solid #6b7280; }
 .task-list > .task-item:nth-child(3) { border-left: 4px solid #b45309; }
