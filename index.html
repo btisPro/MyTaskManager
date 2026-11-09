@@ -52,7 +52,22 @@
         <button id="sidebarToggle" title="Afficher/masquer l'arborescence">☰</button>
         <span class="app-title">MtM</span>
         <div id="searchBox">
-          <input type="text" id="searchInput" placeholder="Rechercher..." autocomplete="off">
+          <!-- autocomplete="search" : indique explicitement aux navigateurs et
+               gestionnaires de mots de passe que ce champ est une recherche,
+               pas un identifiant. Sans ça, le navigateur voit un <input type="text">
+               suivi d'un <input type="password"> (token GitHub) plus bas dans la page
+               et interprète la paire comme un formulaire login/mot de passe,
+               déclenchant la proposition d'enregistrement de mot de passe.
+               role="searchbox" renforce la sémantique ARIA pour lever toute ambiguïté.
+               spellcheck="false" et autocorrect="off" évitent la correction automatique
+               sur mobile qui interfère avec la saisie de recherche. -->
+          <input type="search" id="searchInput" placeholder="Rechercher..."
+                 autocomplete="off"
+                 role="searchbox"
+                 spellcheck="false"
+                 autocorrect="off"
+                 autocapitalize="off"
+                 aria-label="Rechercher une tâche">
         </div>
         <button id="trashBtn" title="Corbeille" class="trash-topbar-btn">🗑<span id="trashBadge" class="trash-badge hidden"></span></button>
         <div id="syncStatus" class="sync-status sync-off" title="Synchronisation">

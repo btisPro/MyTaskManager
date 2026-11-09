@@ -332,6 +332,14 @@ body.dragging-active .tree-root-node > * {
 }
 #searchInput:focus { border-color: var(--accent); background: #fff; }
 
+/* Masque le bouton ✕ natif des navigateurs sur <input type="search">.
+   Nous avons notre propre bouton de fermeture (#searchClose) dans le bandeau
+   d'options. Le ✕ natif créerait une redondance visuelle et son comportement
+   (vider + émettre un event "search") peut interférer avec notre logique. */
+#searchInput::-webkit-search-cancel-button { display: none; }
+#searchInput::-webkit-search-decoration     { display: none; }
+#searchInput::-ms-clear                     { display: none; }
+
 /* ── Bandeau options de recherche ─────────────────────────
    Affiché sous la topbar uniquement quand une recherche est
    active (classe "hidden" retirée par app.js).
