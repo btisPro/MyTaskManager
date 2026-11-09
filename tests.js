@@ -556,13 +556,13 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
-describe('APP_VERSION — valeur courante v1.0.8', () => {
+describe('APP_VERSION — valeur courante v1.0.9', () => {
   // La version est désormais gérée manuellement par le développeur.
-  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.8".
+  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.9".
   const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
   if (match) {
-    assertEqual(match[1], 'v1.0.8', 'APP_VERSION vaut "v1.0.8" (gestion manuelle)');
+    assertEqual(match[1], 'v1.0.9', 'APP_VERSION vaut "v1.0.9" (gestion manuelle)');
   }
 });
 
@@ -1282,6 +1282,52 @@ describe('Menu contextuel — logique bascule importance (simulation)', () => {
   assertEqual(applyImportance('high',   'medium'), 'medium', 'high → clic moyenne → medium');
   // Clic sur "forte" quand importance = 'medium' → passe à 'high' (changement)
   assertEqual(applyImportance('medium', 'high'),   'high',   'medium → clic haute → high');
+});
+
+describe('Suppression coloration positionnelle des 3 premières tâches (v1.0.9)', () => {
+  /*
+   * Vérifie que les règles CSS nth-child(1/2/3) sur .task-item ont été
+   * supprimées. Ces règles coloraient les 3 premières tâches de chaque liste
+   * selon leur POSITION (or/gris/marron), sans aucun lien avec les données
+   * de la tâche (importance, date d'échéance…). Cette coloration arbitraire
+   * était trompeuse et entrait en conflit visuellement avec la coloration
+   * d'urgence (.task-urgent / .task-warning) qui, elle, est basée sur les données.
+   *
+   * Les règles d'urgence basées sur les données DOIVENT rester présentes.
+   */
+  const css = fs.readFileSync(path.join(__dirname, 'style.css'), 'utf8');
+
+  // ── Absence des règles positionnelles supprimées ───────────────────────────
+  assert(
+    !css.includes('.task-list > .task-item:nth-child(1)'),
+    'Règle nth-child(1) sur .task-item absente de style.css (coloration positionnelle supprimée)'
+  );
+  assert(
+    !css.includes('.task-list > .task-item:nth-child(2)'),
+    'Règle nth-child(2) sur .task-item absente de style.css (coloration positionnelle supprimée)'
+  );
+  assert(
+    !css.includes('.task-list > .task-item:nth-child(3)'),
+    'Règle nth-child(3) sur .task-item absente de style.css (coloration positionnelle supprimée)'
+  );
+
+  // ── Présence des règles d'urgence basées sur les données (non régressées) ──
+  assert(
+    css.includes('.task-urgent'),
+    'Classe .task-urgent toujours présente dans style.css (coloration urgence conservée)'
+  );
+  assert(
+    css.includes('.task-warning'),
+    'Classe .task-warning toujours présente dans style.css (coloration warning conservée)'
+  );
+  assert(
+    /task-urgent[\s\S]{0,200}border-left/.test(css),
+    '.task-urgent conserve sa bordure gauche colorée (indicateur urgence basé sur données)'
+  );
+  assert(
+    /task-warning[\s\S]{0,200}border-left/.test(css),
+    '.task-warning conserve sa bordure gauche colorée (indicateur warning basé sur données)'
+  );
 });
 
 /* ═══════════════════════════════════════════════════════════

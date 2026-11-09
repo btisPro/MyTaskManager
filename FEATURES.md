@@ -340,7 +340,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14b.1 | Titre "Tâches" supprimé | Le `<h1>Tâches</h1>` de la vue liste a été retiré pour gagner de la place, en particulier sur smartphone. L'identité de l'app est assurée par "MtM" dans la topbar. | `index.html` |
-| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.0.8'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
+| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.0.9'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
 | 14b.3 | Version affichée dans la modale sync | Pied de modale `#syncVersion` (toujours visible, que la sync soit activée ou non). Style monospace discret. | `index.html / style.css / app.js` |
 
 ---
@@ -360,22 +360,25 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 ## 16. Coloration d'urgence des tâches
 
+La seule coloration des tâches est basée sur leurs **données** (importance + date d'échéance). Toute coloration positionnelle (selon le rang dans la liste) a été supprimée (v1.0.9).
+
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 16a.1 | `taskUrgencyClass(task)` | Retourne `''` \| `'task-warning'` \| `'task-urgent'` selon importance + date d'échéance. | `app.js › taskUrgencyClass` |
 | 16a.2 | ROUGE (`task-urgent`) | importance = "high" **OU** date dépassée/aujourd'hui/dans ≤ 3 jours. | `app.js › taskUrgencyClass` |
 | 16a.3 | ORANGE (`task-warning`) | importance = "medium" **OU** date dans 4–10 jours. | `app.js › taskUrgencyClass` |
 | 16a.4 | Priorité importance > date | "high" prime sur toute date. La date est testée ensuite. | `app.js › taskUrgencyClass` |
-| 16a.5 | CSS fond + bordure gauche | `.task-urgent` : fond `#fee2e2` (red-100), bordure gauche 5px `#ef4444` (red-500), rang en `#b91c1c`. `.task-warning` : fond `#ffedd5` (orange-100), bordure gauche 5px `#f97316` (orange-500), rang en `#c2410c`. Couleurs franches et clairement visibles. | `style.css` |
+| 16a.5 | CSS fond + bordure gauche | `.task-item.task-urgent` : fond `#fee2e2` (red-100), bordure gauche 5px `#ef4444` (red-500), rang en `#b91c1c`. `.task-item.task-warning` : fond `#ffedd5` (orange-100), bordure gauche 5px `#f97316` (orange-500), rang en `#c2410c`. | `style.css` |
 | 16a.6 | Comparaison dates ISO | Comparaison lexicographique de chaînes `YYYY-MM-DD` (ordre alphabétique = chronologique). Calcul en heure locale. | `app.js › taskUrgencyClass › dateInDays` |
 | 16a.7 | Priorité drop-child > urgence | Les classes drop-child (bleu) remplacent le fond rouge/orange pendant le drag. | `style.css` |
+| 16a.8 | Pas de coloration positionnelle | ~~`.task-list > .task-item:nth-child(1/2/3)`~~ supprimé (v1.0.9) : ces règles coloraient les 3 premières tâches en or/gris/marron selon leur rang — sans lien avec leurs données. | `style.css` |
 
 ## 17. Tests automatisés
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — **185 assertions**, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions + importance), **nouveaux éléments mobile** (`.task-drag-handle`, `.task-menu-btn`, `dragFromHandle`, exclusions touchstart), **bandeau recherche blur**, **items importance menu** (séparateur, classes CSS, bascule toggle, touchUpdatedAt/saveTasks) | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — **192 assertions**, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions + importance), **nouveaux éléments mobile** (`.task-drag-handle`, `.task-menu-btn`, `dragFromHandle`, exclusions touchstart), **bandeau recherche blur**, **items importance menu**, **suppression coloration positionnelle** (absence nth-child 1/2/3, présence .task-urgent/.task-warning) | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes

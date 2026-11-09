@@ -743,10 +743,6 @@ h2:hover { color: var(--accent); }
   .task-menu-btn { opacity: 1; }
 }
 
-.task-list > .task-item:nth-child(1) { border-left: 4px solid #f59e0b; }
-.task-list > .task-item:nth-child(2) { border-left: 4px solid #6b7280; }
-.task-list > .task-item:nth-child(3) { border-left: 4px solid #b45309; }
-
 /* ── Detail view ──────────────────────────────────────────── */
 .detail-header {
   display: flex;
