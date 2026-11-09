@@ -226,11 +226,15 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 |---|---|---|---|
 | 10.1 | Affichage au clic droit (desktop) | Menu positionné à la souris, repositionné pour rester dans le viewport | `app.js › buildTaskItem › contextmenu` |
 | 10.2 | Affichage au long press (mobile) | Appui ≥ 600 ms → menu + vibration 20 ms. Si le doigt bouge ensuite > 10 px → menu fermé + drag. | `app.js › initTouchDrag › longPressTimer` |
-| 10.3 | Options de déplacement | ⬆ Tout en haut, ▲+5, ▲+10, ▲+20, ▼-5, ▼-10, ▼-20 positions | `app.js › showContextMenu › items` |
+| 10.3 | Options de déplacement | ⬆ Tout en haut, ▲+5, ▲+10, ▲+20, ▼-5, ▼-10, ▼-20 positions | `app.js › showContextMenu › moveItems` |
 | 10.4 | Vrai parent retrouvé | En mode recherche, `findParentList` retrouve le vrai tableau parent | `app.js › showContextMenu` |
 | 10.5 | Rafraîchissement adapté | Relance `runSearch()` si mode recherche, sinon `renderList` | `app.js › showContextMenu` |
 | 10.6 | Fermeture automatique | Sur clic/tap ailleurs, scroll, ou touche Échap | `app.js › document click / scroll / keydown` |
 | 10.7 | Transition menu → drag (mobile) | `onCancel` ré-enregistre les handlers après le touchcancel iOS causé par le menu. `onMove` détecte le mouvement post-menu et enchaîne sur le drag. | `app.js › initTouchDrag › onCancel / onMove` |
+| 10.8 | Séparateur entre sections | `<li role="separator" class="ctx-sep">` trace un trait horizontal entre les items de déplacement et les items d'importance. | `app.js › showContextMenu › sep`, `style.css › .ctx-sep` |
+| 10.9 | Item 🔴 Importance forte | Pose `task.importance = 'high'`. Si déjà 'high', bascule à 'low'. Item marqué avec ✓ et classe `ctx-item--active` si importance actuelle. | `app.js › showContextMenu › importanceItems`, `style.css › .ctx-item--importance-high` |
+| 10.10 | Item 🟠 Importance moyenne | Pose `task.importance = 'medium'`. Si déjà 'medium', bascule à 'low'. Item marqué avec ✓ et classe `ctx-item--active` si importance actuelle. | `app.js › showContextMenu › importanceItems`, `style.css › .ctx-item--importance-medium` |
+| 10.11 | Classes CSS dédiées (non nth-child) | Les styles des items sont portés par des classes explicites (`ctx-item--top`, `ctx-item--down`, `ctx-item--importance-high/medium`, `ctx-item--active`) plutôt que `nth-child`, pour rester robustes à l'ajout de nouveaux items. | `style.css` |
 
 ---
 
@@ -336,7 +340,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14b.1 | Titre "Tâches" supprimé | Le `<h1>Tâches</h1>` de la vue liste a été retiré pour gagner de la place, en particulier sur smartphone. L'identité de l'app est assurée par "MtM" dans la topbar. | `index.html` |
-| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.0.7'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
+| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.0.8'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
 | 14b.3 | Version affichée dans la modale sync | Pied de modale `#syncVersion` (toujours visible, que la sync soit activée ou non). Style monospace discret. | `index.html / style.css / app.js` |
 
 ---
@@ -370,8 +374,8 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — **160 assertions**, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions), **nouveaux éléments mobile** (`.task-drag-handle`, `.task-menu-btn`, `dragFromHandle`, exclusions touchstart), **bandeau recherche blur** (`listener blur`, `setTimeout`, garde checkboxes, garde critère actif) | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — **185 assertions**, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions + importance), **nouveaux éléments mobile** (`.task-drag-handle`, `.task-menu-btn`, `dragFromHandle`, exclusions touchstart), **bandeau recherche blur**, **items importance menu** (séparateur, classes CSS, bascule toggle, touchUpdatedAt/saveTasks) | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes

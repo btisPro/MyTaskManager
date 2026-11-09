@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.0.7';
+const APP_VERSION = 'v1.0.8';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
@@ -1100,8 +1100,12 @@ ctxMenu.className = 'ctx-menu hidden';
 document.body.appendChild(ctxMenu);
 
 /**
- * Affiche le menu contextuel au niveau du clic droit.
- * @param {MouseEvent} e   - Événement contextmenu
+ * Affiche le menu contextuel au niveau du clic droit / tap sur ⋮.
+ * Le menu comporte deux sections séparées par un trait horizontal (ctx-sep) :
+ *   1. Déplacement dans la liste (positions relatives)
+ *   2. Changement d'importance de la tâche (haute / moyenne)
+ *
+ * @param {MouseEvent} e   - Événement contextmenu (ou faux event du bouton ⋮)
  * @param {Task}  task     - Tâche sur laquelle on a cliqué
  * @param {Task[]} tasks   - Tableau contenant cette tâche
  * @param {HTMLElement} listEl - <ul> qui affiche ce tableau
@@ -1111,20 +1115,24 @@ function showContextMenu(e, task, tasks, listEl) {
   e.stopPropagation();
   ctxMenu.innerHTML = '';
 
-  // delta < 0 = remonter, delta > 0 = descendre, -Infinity = tout en haut
-  const items = [
-    { label: '⬆ Tout en haut',  delta: -Infinity },
-    { label: '▲ +5 positions',   delta: -5  },
-    { label: '▲ +10 positions',  delta: -10 },
-    { label: '▲ +20 positions',  delta: -20 },
-    { label: '▼ -5 positions',   delta: +5  },
-    { label: '▼ -10 positions',  delta: +10 },
-    { label: '▼ -20 positions',  delta: +20 },
+  // ── Section 1 : déplacement de position ───────────────────────────────────
+  // delta < 0 = remonter, delta > 0 = descendre, -Infinity = tout en haut.
+  // La classe 'ctx-item--top' marque le premier item (style accent + séparateur
+  // en bas) ; 'ctx-item--down' marque les items de descente (couleur atténuée).
+  const moveItems = [
+    { label: '⬆ Tout en haut',  delta: -Infinity, cls: 'ctx-item--top'  },
+    { label: '▲ +5 positions',   delta: -5                               },
+    { label: '▲ +10 positions',  delta: -10                              },
+    { label: '▲ +20 positions',  delta: -20                              },
+    { label: '▼ -5 positions',   delta: +5,        cls: 'ctx-item--down' },
+    { label: '▼ -10 positions',  delta: +10,       cls: 'ctx-item--down' },
+    { label: '▼ -20 positions',  delta: +20,       cls: 'ctx-item--down' },
   ];
 
-  items.forEach(({ label, delta }) => {
+  moveItems.forEach(({ label, delta, cls }) => {
     const li = document.createElement('li');
-    li.className = 'ctx-item';
+    // La classe de base 'ctx-item' + éventuellement une variante de style
+    li.className = cls ? `ctx-item ${cls}` : 'ctx-item';
     li.textContent = label;
     li.addEventListener('click', (e) => {
       // stopPropagation empêche le click de remonter jusqu'à
@@ -1145,18 +1153,70 @@ function showContextMenu(e, task, tasks, listEl) {
       const [moved] = realList.splice(idx, 1);
       realList.splice(newIdx, 0, moved);
       // La tâche a changé de position : touchUpdatedAt() met à jour son updatedAt
-      // pour signaler à la sync que ce réordonnement local doit être préservé
-      // (la position relative dans la liste est un élément d'état de la tâche).
+      // pour signaler à la sync que ce réordonnement local doit être préservé.
       touchUpdatedAt(moved.id);
       saveTasks();
       // Rafraîchit la vue courante (liste principale, sous-tâches, ou recherche)
       if (listEl === searchList) {
         renderTree();
         runSearch();
-       } else {
-         renderList(listEl, realList);
-         renderTree();
-       }
+      } else {
+        renderList(listEl, realList);
+        renderTree();
+      }
+    });
+    ctxMenu.appendChild(li);
+  });
+
+  // ── Séparateur entre les deux sections ────────────────────────────────────
+  // <li role="separator"> est la balise sémantique correcte pour un séparateur
+  // dans un menu. La classe 'ctx-sep' applique le trait horizontal via CSS.
+  const sep = document.createElement('li');
+  sep.className = 'ctx-sep';
+  sep.setAttribute('role', 'separator');
+  ctxMenu.appendChild(sep);
+
+  // ── Section 2 : changement d'importance ───────────────────────────────────
+  // Ces items modifient task.importance directement (comme le <select> du détail).
+  // On n'affiche que les deux valeurs non-"low" pour garder le menu court ;
+  // un clic sur un item déjà actif remet à "low" (bascule).
+  //
+  // Comportement :
+  //   - Si task.importance === 'high'   → cliquer "🔴 Importance forte" remet à 'low'
+  //   - Si task.importance === 'medium' → cliquer "🟠 Importance moyenne" remet à 'low'
+  //   - Sinon                           → cliquer pose la nouvelle valeur
+  //
+  // La valeur active est mise en évidence par la classe 'ctx-item--active'.
+  const importanceItems = [
+    { label: '🔴 Importance forte',   value: 'high',   cls: 'ctx-item--importance-high'   },
+    { label: '🟠 Importance moyenne', value: 'medium', cls: 'ctx-item--importance-medium' },
+  ];
+
+  importanceItems.forEach(({ label, value, cls }) => {
+    const li = document.createElement('li');
+    // 'ctx-item--active' est ajouté si c'est la valeur actuellement en place
+    const isActive = task.importance === value;
+    li.className = `ctx-item ${cls}${isActive ? ' ctx-item--active' : ''}`;
+    // Label enrichi d'une coche ✓ quand l'item est l'importance courante
+    li.textContent = isActive ? `${label} ✓` : label;
+    li.addEventListener('click', (e) => {
+      e.stopPropagation();
+      hideContextMenu();
+      // Bascule : si l'importance est déjà celle-ci, on revient à "low"
+      task.importance = isActive ? 'low' : value;
+      touchUpdatedAt(task.id);
+      saveTasks();
+      // Rafraîchit la liste pour mettre à jour la coloration d'urgence du <li>
+      // (_refreshCurrentList ne fonctionne que depuis la vue détail ; ici on est
+      // dans la liste ou la recherche, donc on rafraîchit directement le bon <ul>)
+      if (listEl === searchList) {
+        renderTree();
+        runSearch();
+      } else {
+        const realList = findParentList(rootTasks, task.id) || tasks;
+        renderList(listEl, realList);
+        renderTree();
+      }
     });
     ctxMenu.appendChild(li);
   });

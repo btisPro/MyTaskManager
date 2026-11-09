@@ -918,25 +918,64 @@ h2:hover { color: var(--accent); }
   font-weight: 500;
 }
 
-.ctx-item:first-child {
+/* ── Premier item (⬆ Tout en haut) : accent + séparateur bas ──────────────── */
+.ctx-item--top {
   border-bottom: 1px solid var(--border);
   font-weight: 600;
   color: var(--accent);
 }
-
-.ctx-item:first-child:hover {
+.ctx-item--top:hover {
   background: #fef3c7;
   color: #92400e;
 }
 
-.ctx-item:nth-child(5) {
-  border-top: 1px solid var(--border);
+/* ── Items de descente (▼) : couleur atténuée + hover rouge doux ──────────── */
+.ctx-item--down {
   color: #6b7280;
 }
-
-.ctx-item:nth-child(n+5):hover {
+.ctx-item--down:hover {
   background: #fef2f2;
   color: #b91c1c;
+}
+
+/* ── Séparateur entre sections ─────────────────────────────────────────────── */
+/* <li role="separator" class="ctx-sep"> trace un trait horizontal entre les   */
+/* deux groupes d'items (déplacement / importance). Non cliquable.             */
+.ctx-sep {
+  height: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Items d'importance : 🔴 forte ─────────────────────────────────────────── */
+.ctx-item--importance-high {
+  color: #dc2626;
+}
+.ctx-item--importance-high:hover {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* ── Items d'importance : 🟠 moyenne ───────────────────────────────────────── */
+.ctx-item--importance-medium {
+  color: #ea580c;
+}
+.ctx-item--importance-medium:hover {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+/* ── Item d'importance actif (valeur déjà sélectionnée) : fond coloré doux ── */
+/* La coche ✓ dans le label + ce fond indiquent visuellement l'état courant.  */
+.ctx-item--active.ctx-item--importance-high {
+  background: #fee2e2;
+  font-weight: 600;
+}
+.ctx-item--active.ctx-item--importance-medium {
+  background: #ffedd5;
+  font-weight: 600;
 }
 
 /* ── Vue détail draggable ─────────────────────────────────── */

@@ -556,13 +556,13 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
-describe('APP_VERSION — valeur courante v1.0.7', () => {
+describe('APP_VERSION — valeur courante v1.0.8', () => {
   // La version est désormais gérée manuellement par le développeur.
-  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.7".
+  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.8".
   const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
   if (match) {
-    assertEqual(match[1], 'v1.0.7', 'APP_VERSION vaut "v1.0.7" (gestion manuelle)');
+    assertEqual(match[1], 'v1.0.8', 'APP_VERSION vaut "v1.0.8" (gestion manuelle)');
   }
 });
 
@@ -1135,6 +1135,153 @@ describe('Bandeau recherche — masquage au blur (v1.0.7)', () => {
     /searchInput\.value\.trim\(\)[\s\S]{0,50}searchUrgent\.checked[\s\S]{0,50}searchWarning\.checked/.test(src),
     'Garde "critère actif" présente dans le blur (texte OU filtre coché → bandeau reste)'
   );
+});
+
+describe('Menu contextuel — items importance haute et moyenne (v1.0.8)', () => {
+  /*
+   * Vérifie que showContextMenu contient les deux nouveaux items d'importance,
+   * le séparateur entre sections, et la logique de bascule (toggle).
+   *
+   * COMPORTEMENT ATTENDU :
+   *   - Un séparateur 'ctx-sep' est inséré entre les items de déplacement
+   *     et les items d'importance.
+   *   - Deux items : "🔴 Importance forte" (value='high') et
+   *     "🟠 Importance moyenne" (value='medium').
+   *   - Chacun est créé avec une classe CSS dédiée
+   *     (ctx-item--importance-high / ctx-item--importance-medium).
+   *   - La classe 'ctx-item--active' est ajoutée si task.importance correspond.
+   *   - Cliquer sur l'item actif remet task.importance à 'low' (bascule).
+   *   - touchUpdatedAt() et saveTasks() sont appelés après chaque changement.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  // Séparateur entre les deux sections du menu
+  assert(
+    src.includes("sep.className = 'ctx-sep'"),
+    "Séparateur ctx-sep créé dans showContextMenu"
+  );
+  assert(
+    src.includes("sep.setAttribute('role', 'separator')"),
+    "role='separator' posé sur le séparateur (sémantique ARIA)"
+  );
+
+  // Présence des deux items d'importance dans le tableau importanceItems
+  assert(
+    src.includes("'🔴 Importance forte'") || src.includes('🔴 Importance forte'),
+    "Item '🔴 Importance forte' présent dans showContextMenu"
+  );
+  assert(
+    src.includes("'🟠 Importance moyenne'") || src.includes('🟠 Importance moyenne'),
+    "Item '🟠 Importance moyenne' présent dans showContextMenu"
+  );
+
+  // Classes CSS dédiées
+  assert(
+    src.includes('ctx-item--importance-high'),
+    "Classe ctx-item--importance-high utilisée pour l'item 🔴"
+  );
+  assert(
+    src.includes('ctx-item--importance-medium'),
+    "Classe ctx-item--importance-medium utilisée pour l'item 🟠"
+  );
+
+  // La classe active est ajoutée conditionnellement
+  assert(
+    src.includes('ctx-item--active'),
+    "Classe ctx-item--active présente (item actif marqué visuellement)"
+  );
+  assert(
+    /task\.importance\s*===\s*value/.test(src),
+    'Comparaison task.importance === value pour détecter item actif'
+  );
+
+  // Logique de bascule : si déjà actif → revenir à 'low'
+  assert(
+    /isActive\s*\?\s*'low'\s*:\s*value/.test(src),
+    "Bascule : si item actif → revient à 'low', sinon pose la nouvelle valeur"
+  );
+
+  // touchUpdatedAt et saveTasks appelés après changement d'importance
+  assert(
+    /importance[\s\S]{0,200}touchUpdatedAt/.test(src),
+    'touchUpdatedAt() appelé après changement importance dans le menu contextuel'
+  );
+  assert(
+    /importance[\s\S]{0,200}saveTasks/.test(src),
+    'saveTasks() appelé après changement importance dans le menu contextuel'
+  );
+});
+
+describe('Menu contextuel — classes CSS (style.css)', () => {
+  /*
+   * Vérifie que style.css contient les nouvelles classes dédiées aux items
+   * d'importance du menu contextuel, en remplacement des anciens sélecteurs
+   * nth-child fragiles (qui ne tolèrent pas l'ajout de nouveaux items).
+   */
+  const css = fs.readFileSync(path.join(__dirname, 'style.css'), 'utf8');
+
+  assert(
+    css.includes('.ctx-item--top'),
+    'Classe .ctx-item--top définie dans style.css (remplace :first-child)'
+  );
+  assert(
+    css.includes('.ctx-item--down'),
+    'Classe .ctx-item--down définie dans style.css (remplace nth-child)'
+  );
+  assert(
+    css.includes('.ctx-sep'),
+    'Classe .ctx-sep définie dans style.css (séparateur horizontal)'
+  );
+  assert(
+    css.includes('.ctx-item--importance-high'),
+    'Classe .ctx-item--importance-high définie dans style.css'
+  );
+  assert(
+    css.includes('.ctx-item--importance-medium'),
+    'Classe .ctx-item--importance-medium définie dans style.css'
+  );
+  assert(
+    css.includes('.ctx-item--active'),
+    'Classe .ctx-item--active définie dans style.css (item importance courant)'
+  );
+
+  // Les anciens sélecteurs nth-child ne doivent plus être là (ils sont fragiles)
+  assert(
+    !css.includes('.ctx-item:nth-child(5)') && !css.includes('.ctx-item:nth-child(n+5)'),
+    'Anciens sélecteurs nth-child supprimés de .ctx-item dans style.css'
+  );
+  // :first-child sur .ctx-item aussi supprimé
+  assert(
+    !css.includes('.ctx-item:first-child'),
+    'Ancien .ctx-item:first-child supprimé de style.css'
+  );
+});
+
+describe('Menu contextuel — logique bascule importance (simulation)', () => {
+  /*
+   * Simule la logique de bascule d'importance du menu contextuel
+   * sans DOM : vérifie qu'un clic sur l'item actif revient à 'low'
+   * et qu'un clic sur un item inactif pose la nouvelle valeur.
+   */
+
+  // Reproduction de la logique de bascule de showContextMenu
+  function applyImportance(currentImportance, clickedValue) {
+    const isActive = currentImportance === clickedValue;
+    return isActive ? 'low' : clickedValue;
+  }
+
+  // Clic sur "forte" quand importance = 'low' → passe à 'high'
+  assertEqual(applyImportance('low',    'high'),   'high',   'low → clic haute → high');
+  // Clic sur "forte" quand importance = 'high' → revient à 'low' (bascule)
+  assertEqual(applyImportance('high',   'high'),   'low',    'high → clic haute (actif) → low (bascule)');
+  // Clic sur "moyenne" quand importance = 'low' → passe à 'medium'
+  assertEqual(applyImportance('low',    'medium'), 'medium', 'low → clic moyenne → medium');
+  // Clic sur "moyenne" quand importance = 'medium' → revient à 'low' (bascule)
+  assertEqual(applyImportance('medium', 'medium'), 'low',    'medium → clic moyenne (actif) → low (bascule)');
+  // Clic sur "moyenne" quand importance = 'high' → passe à 'medium' (changement)
+  assertEqual(applyImportance('high',   'medium'), 'medium', 'high → clic moyenne → medium');
+  // Clic sur "forte" quand importance = 'medium' → passe à 'high' (changement)
+  assertEqual(applyImportance('medium', 'high'),   'high',   'medium → clic haute → high');
 });
 
 /* ═══════════════════════════════════════════════════════════
