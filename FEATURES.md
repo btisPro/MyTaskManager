@@ -242,7 +242,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 11.2 | Scope : niveau courant | Par défaut, ne cherche que dans la liste visible | `app.js › runSearch › searchLevel` |
 | 11.3 | Scope : tous les niveaux | Option "Tous les niveaux" — parcours récursif de tout l'arbre | `app.js › runSearch › searchAll` |
 | 11.4 | Recherche dans les notes | Option "Inclure les notes" — cherche dans le HTML Quill (texte brut) | `app.js › matchTask` |
-| 11.9b | Bandeau options sous topbar | Cases à cocher dans un bandeau `#searchOptions` affiché sous la topbar dès que le champ reçoit le focus (listener `focus`) OU qu'une recherche est active. `closeSearch` le masque et décoche les filtres urgence. | `app.js › showSearch / closeSearch / searchInput focus`, `index.html › #searchOptions` |
+| 11.9b | Bandeau options sous topbar | Cases à cocher dans un bandeau `#searchOptions` affiché sous la topbar dès que le champ reçoit le focus. **Masquage au blur** : quand le champ perd le focus, un `setTimeout(150ms)` vérifie si le focus est passé sur un élément du bandeau (`searchOptions.contains(activeElement)`) — si oui, le bandeau reste ; si aucun critère n'est actif et le focus est ailleurs, `hidden` est rajouté. Si un critère est actif, le bandeau reste visible. `closeSearch` le masque et décoche les filtres urgence. | `app.js › searchInput blur / focus / closeSearch`, `index.html › #searchOptions` |
 | 11.5 | Affichage du chemin | Chaque résultat montre son chemin d'appartenance (ex: `Projet › Sprint`) | `app.js › buildTaskItem › pathSpan` |
 | 11.6 | Hint de résultats | Nombre de résultats + filtres actifs affichés sous le champ | `app.js › runSearch › searchHint` |
 | 11.7 | Mode searchResultMode | Pas de drag intra-liste, navigation vers la tâche dans l'arbre au clic 📋 | `app.js › buildTaskItem / noteIcon` |
@@ -336,7 +336,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14b.1 | Titre "Tâches" supprimé | Le `<h1>Tâches</h1>` de la vue liste a été retiré pour gagner de la place, en particulier sur smartphone. L'identité de l'app est assurée par "MtM" dans la topbar. | `index.html` |
-| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.0.2'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
+| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.0.7'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
 | 14b.3 | Version affichée dans la modale sync | Pied de modale `#syncVersion` (toujours visible, que la sync soit activée ou non). Style monospace discret. | `index.html / style.css / app.js` |
 
 ---
@@ -370,8 +370,8 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — **155 assertions**, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions), **nouveaux éléments mobile** (`.task-drag-handle`, `.task-menu-btn`, `dragFromHandle`, exclusions touchstart) | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — **160 assertions**, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions), **nouveaux éléments mobile** (`.task-drag-handle`, `.task-menu-btn`, `dragFromHandle`, exclusions touchstart), **bandeau recherche blur** (`listener blur`, `setTimeout`, garde checkboxes, garde critère actif) | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes

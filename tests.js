@@ -556,13 +556,13 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
-describe('APP_VERSION — valeur courante v1.0.2', () => {
+describe('APP_VERSION — valeur courante v1.0.7', () => {
   // La version est désormais gérée manuellement par le développeur.
-  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.2".
+  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.7".
   const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
   if (match) {
-    assertEqual(match[1], 'v1.0.2', 'APP_VERSION vaut "v1.0.2" (gestion manuelle)');
+    assertEqual(match[1], 'v1.0.7', 'APP_VERSION vaut "v1.0.7" (gestion manuelle)');
   }
 });
 
@@ -1088,6 +1088,52 @@ describe('touch-action:none sur .task-drag-handle dans style.css', () => {
     /pointer:\s*coarse[\s\S]{0,200}task-drag-handle[\s\S]{0,100}opacity:\s*1/.test(css) ||
     /pointer:\s*coarse[\s\S]{0,200}\.task-drag-handle,[\s\S]{0,100}opacity:\s*1/.test(css),
     'Mobile (pointer:coarse) : task-drag-handle toujours visible (opacity:1)'
+  );
+});
+
+describe('Bandeau recherche — masquage au blur (v1.0.7)', () => {
+  /*
+   * Vérifie que le code source implémente correctement la logique de masquage
+   * du bandeau #searchOptions quand searchInput perd le focus.
+   *
+   * COMPORTEMENT ATTENDU :
+   *   - Le handler blur sur searchInput est présent.
+   *   - Il utilise un setTimeout (délai 150 ms) pour laisser le focus se poser
+   *     sur sa cible avant de décider de fermer le bandeau.
+   *   - La vérification "searchOptions.contains(document.activeElement)" évite
+   *     de fermer le bandeau quand le focus passe sur une checkbox du bandeau.
+   *   - Si un critère est actif (texte ou filtre coché), le bandeau reste visible.
+   *   - Sinon, la classe "hidden" est rajoutée sur searchOptions.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  assert(
+    src.includes("searchInput.addEventListener('blur'"),
+    "Listener 'blur' présent sur searchInput"
+  );
+
+  // Le blur utilise un setTimeout pour attendre que le focus se soit posé
+  assert(
+    /searchInput\.addEventListener\('blur'[\s\S]{0,300}setTimeout/.test(src),
+    'setTimeout utilisé dans le handler blur (délai avant décision de fermeture)'
+  );
+
+  // Vérifie que le code teste si le focus est dans le bandeau
+  assert(
+    src.includes('searchOptions.contains(document.activeElement)'),
+    'Vérification searchOptions.contains(document.activeElement) présente (garde pour checkboxes)'
+  );
+
+  // Si aucun critère actif → masque le bandeau via classList.add('hidden')
+  assert(
+    /blur[\s\S]{0,1500}searchOptions\.classList\.add\('hidden'\)/.test(src),
+    "Ajout de 'hidden' sur searchOptions dans le handler blur quand aucun critère"
+  );
+
+  // La garde "critère actif → ne pas fermer" est présente
+  assert(
+    /searchInput\.value\.trim\(\)[\s\S]{0,50}searchUrgent\.checked[\s\S]{0,50}searchWarning\.checked/.test(src),
+    'Garde "critère actif" présente dans le blur (texte OU filtre coché → bandeau reste)'
   );
 });
 

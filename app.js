@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.0.6';
+const APP_VERSION = 'v1.0.7';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
@@ -2021,11 +2021,49 @@ subTaskInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSubT
 let searchTimer = null;
 
 // Déclenchement de la recherche 200 ms après la dernière frappe
-// Affiche le bandeau d'options dès que le champ reçoit le focus.
-// Cela permet à l'utilisateur de cocher un filtre urgence AVANT de taper du texte.
-// Le bandeau disparaît si l'utilisateur quitte le champ sans critère (via closeSearch).
+// ── Gestion de la visibilité du bandeau d'options de recherche ──────────────
+//
+// RÈGLE D'AFFICHAGE :
+//   - Le bandeau apparaît dès que searchInput reçoit le focus.
+//   - Le bandeau disparaît quand searchInput perd le focus (blur), SAUF :
+//       a) si le focus passe sur un élément du bandeau lui-même (ex : une
+//          checkbox "Urgentes" ou "Importantes") → l'interaction doit être
+//          possible sans fermer le bandeau sous le doigt.
+//       b) si une recherche est active (texte saisi ou filtre coché) → le
+//          bandeau doit rester visible pour que l'utilisateur puisse voir/
+//          modifier ses filtres actifs.
+//
+// TECHNIQUE DU DÉLAI :
+//   Sur un clic depuis la liste de résultats ou depuis une checkbox du bandeau,
+//   l'ordre des événements est : blur(searchInput) → focus(cible) → click(cible).
+//   Si on réagit au blur immédiatement, le click sur la cible n'a pas encore
+//   été enregistré et document.activeElement est encore en transition.
+//   On attend 150 ms pour laisser le focus se poser sur sa vraie cible, puis on
+//   vérifie si cette cible est à l'intérieur du bandeau.
+
 searchInput.addEventListener('focus', () => {
+  // Affiche le bandeau dès que le champ reçoit le focus.
+  // Cela permet à l'utilisateur de cocher un filtre urgence AVANT de taper.
   searchOptions.classList.remove('hidden');
+});
+
+searchInput.addEventListener('blur', () => {
+  // Délai de 150 ms : laisse le temps au navigateur de transférer le focus
+  // vers sa vraie cible (checkbox, bouton, etc.) avant qu'on décide de fermer.
+  setTimeout(() => {
+    // CAS 1 — Le focus est passé sur un élément du bandeau (checkbox, label…) :
+    // on ne ferme PAS le bandeau pour que l'interaction se déroule normalement.
+    if (searchOptions.contains(document.activeElement)) return;
+
+    // CAS 2 — Une recherche est toujours active (texte ou filtre coché) :
+    // on garde le bandeau visible pour que l'utilisateur voie ses filtres actifs.
+    if (searchInput.value.trim() || searchUrgent.checked || searchWarning.checked) return;
+
+    // CAS 3 — Aucun critère et focus hors bandeau : on masque le bandeau.
+    // On ne déclenche PAS closeSearch() (qui réinitialiserait tout) car il est
+    // possible que l'utilisateur revienne sur le champ sans avoir lancé de recherche.
+    searchOptions.classList.add('hidden');
+  }, 150);
 });
 
 searchInput.addEventListener('input', () => {
