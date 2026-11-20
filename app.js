@@ -7,7 +7,7 @@
      CORRECTIF : correction de bug ou ajustement mineur
    Affiché dans la modale de synchronisation (pied de page).
 ════════════════════════════════════════════════════════════ */
-const APP_VERSION = 'v1.0.9';
+const APP_VERSION = 'v1.1.1';
 
 /* ═══════════════════════════════════════════════════════════
    STORAGE — Persistance dans localStorage
@@ -1115,56 +1115,104 @@ function showContextMenu(e, task, tasks, listEl) {
   e.stopPropagation();
   ctxMenu.innerHTML = '';
 
-  // ── Section 1 : déplacement de position ───────────────────────────────────
-  // delta < 0 = remonter, delta > 0 = descendre, -Infinity = tout en haut.
-  // La classe 'ctx-item--top' marque le premier item (style accent + séparateur
-  // en bas) ; 'ctx-item--down' marque les items de descente (couleur atténuée).
+  // ── Section 1 : déplacement vers une position absolue ────────────────────
+  //
+  // Les cibles sont exprimées en FRACTIONS du tableau réel (retrouvé via
+  // findParentList pour être robuste au mode recherche).
+  // Elles sont calculées au moment du clic, pas à l'ouverture du menu, afin
+  // de refléter le nombre de tâches au moment de l'action.
+  //
+  // Définition des cibles :
+  //   "Tout en haut"    → index 0
+  //   "Top 10%"         → Math.floor(n * 0.10)  (au moins index 1 si n > 1)
+  //   "Premier quart"   → Math.floor(n * 0.25)
+  //   "Première moitié" → Math.floor(n * 0.50)
+  //
+  // Un item est GRISÉ (ctx-item--disabled, non cliquable) si la tâche est
+  // déjà à cette position ou en deçà (idx <= cible calculée). Cela évite de
+  // proposer des actions sans effet et indique à l'utilisateur que la tâche
+  // est déjà dans la zone visée.
+  //
+  // La fraction est stockée dans chaque descripteur et calculée en closure
+  // dans le handler click pour obtenir le n réel au moment de l'action.
+
+  // Descripteurs des items de déplacement.
+  // fraction : fraction [0, 1[ de la liste cible (null = position 0 exacte).
+  // cls      : classe de style supplémentaire (optionnel).
   const moveItems = [
-    { label: '⬆ Tout en haut',  delta: -Infinity, cls: 'ctx-item--top'  },
-    { label: '▲ +5 positions',   delta: -5                               },
-    { label: '▲ +10 positions',  delta: -10                              },
-    { label: '▲ +20 positions',  delta: -20                              },
-    { label: '▼ -5 positions',   delta: +5,        cls: 'ctx-item--down' },
-    { label: '▼ -10 positions',  delta: +10,       cls: 'ctx-item--down' },
-    { label: '▼ -20 positions',  delta: +20,       cls: 'ctx-item--down' },
+    { label: '⬆ Tout en haut',    fraction: null, cls: 'ctx-item--top' },
+    { label: '⬆ Top 10%',         fraction: 0.10                       },
+    { label: '▲ Premier quart',    fraction: 0.25                       },
+    { label: '▲ Première moitié', fraction: 0.50                       },
   ];
 
-  moveItems.forEach(({ label, delta, cls }) => {
+  // Pré-calcul de l'index courant pour griser les items déjà atteints.
+  // On retrouve le vrai tableau ici uniquement pour l'affichage initial ;
+  // le handler click le retrouve à nouveau pour l'action réelle.
+  const previewList = findParentList(rootTasks, task.id) || tasks;
+  const currentIdx  = previewList.findIndex(t => t.id === task.id);
+  const n           = previewList.length;
+
+  moveItems.forEach(({ label, fraction, cls }) => {
+    // Calcul de l'index cible pour l'affichage initial (grisage)
+    const targetIdx = fraction === null ? 0 : Math.floor(n * fraction);
+    // L'item est déjà atteint si l'index courant est déjà à/avant la cible
+    const alreadyThere = currentIdx !== -1 && currentIdx <= targetIdx;
+
     const li = document.createElement('li');
-    // La classe de base 'ctx-item' + éventuellement une variante de style
-    li.className = cls ? `ctx-item ${cls}` : 'ctx-item';
+    // Compose les classes : base + variante de style + désactivé si déjà là
+    const classes = ['ctx-item'];
+    if (cls) classes.push(cls);
+    if (alreadyThere) classes.push('ctx-item--disabled');
+    li.className = classes.join(' ');
     li.textContent = label;
-    li.addEventListener('click', (e) => {
-      // stopPropagation empêche le click de remonter jusqu'à
-      // document.addEventListener('click', hideContextMenu) qui fermerait
-      // le menu AVANT que ce handler ait le temps d'exécuter l'action.
-      // Sans ça, sur mobile, le tap sur un item ferme le menu sans rien faire.
-      e.stopPropagation();
-      hideContextMenu();
-      // Retrouve le vrai tableau parent (en mode recherche, `tasks` est un tableau
-      // de résultats temporaire — pas le vrai parent de la tâche)
-      const realList = findParentList(rootTasks, task.id) || tasks;
-      const idx = realList.findIndex(t => t.id === task.id);
-      if (idx === -1) return;
-      const newIdx = delta === -Infinity
-        ? 0
-        : Math.max(0, Math.min(realList.length - 1, idx + delta));
-      if (newIdx === idx) return;
-      const [moved] = realList.splice(idx, 1);
-      realList.splice(newIdx, 0, moved);
-      // La tâche a changé de position : touchUpdatedAt() met à jour son updatedAt
-      // pour signaler à la sync que ce réordonnement local doit être préservé.
-      touchUpdatedAt(moved.id);
-      saveTasks();
-      // Rafraîchit la vue courante (liste principale, sous-tâches, ou recherche)
-      if (listEl === searchList) {
-        renderTree();
-        runSearch();
-      } else {
-        renderList(listEl, realList);
-        renderTree();
-      }
-    });
+
+    if (alreadyThere) {
+      // Item grisé : on ne pose pas de listener (aucune action possible)
+      li.setAttribute('aria-disabled', 'true');
+    } else {
+      li.addEventListener('click', (e) => {
+        // stopPropagation empêche le click de remonter jusqu'à
+        // document.addEventListener('click', hideContextMenu) qui fermerait
+        // le menu AVANT que ce handler ait le temps d'exécuter l'action.
+        // Sans ça, sur mobile, le tap sur un item ferme le menu sans rien faire.
+        e.stopPropagation();
+        hideContextMenu();
+
+        // Retrouve le vrai tableau parent au moment de l'action.
+        // (en mode recherche, `tasks` est temporaire — pas le vrai parent)
+        const realList = findParentList(rootTasks, task.id) || tasks;
+        const idx = realList.findIndex(t => t.id === task.id);
+        if (idx === -1) return;
+
+        // Recalcul de la cible sur la liste réelle au moment du clic
+        // (la liste peut avoir changé depuis l'ouverture du menu)
+        const newIdx = fraction === null
+          ? 0
+          : Math.floor(realList.length * fraction);
+
+        if (newIdx === idx) return; // déjà en place, rien à faire
+        const [moved] = realList.splice(idx, 1);
+        // Recalcul post-splice si la cible était après la source
+        const insertIdx = fraction === null
+          ? 0
+          : Math.floor(realList.length * fraction);
+        realList.splice(insertIdx, 0, moved);
+
+        // La tâche a changé de position : touchUpdatedAt() met à jour son updatedAt
+        // pour signaler à la sync que ce réordonnement local doit être préservé.
+        touchUpdatedAt(moved.id);
+        saveTasks();
+        // Rafraîchit la vue courante (liste principale, sous-tâches, ou recherche)
+        if (listEl === searchList) {
+          renderTree();
+          runSearch();
+        } else {
+          renderList(listEl, realList);
+          renderTree();
+        }
+      });
+    }
     ctxMenu.appendChild(li);
   });
 
@@ -1430,7 +1478,21 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   // car sur un élément draggable, l'événement "click" peut être annulé
   // par le navigateur si le pointeur a légèrement bougé (détection de drag).
   // La variable `pointerMoved` permet de distinguer un vrai clic d'un glisser.
-  const getList = () => tasks; // closure : accès au tableau live au moment du flush
+  //
+  // IMPORTANT — Mode recherche :
+  // En mode recherche, `tasks` est un tableau temporaire de résultats (snapshop
+  // de collectAllTasksFlat / runSearch). Ce tableau ne correspond PAS aux vraies
+  // données persistées. Faire un splice dessus n'aurait aucun effet réel.
+  // On utilise donc findParentList() pour retrouver le vrai tableau parent de
+  // la tâche dans rootTasks, afin que le réordonnement soit effectif.
+  const getList = () => {
+    if (searchResultMode) {
+      // Retrouve dynamiquement le vrai tableau parent au moment du flush
+      // (la liste peut avoir changé depuis la construction du <li>)
+      return findParentList(rootTasks, task.id) || tasks;
+    }
+    return tasks; // hors recherche : closure directe sur le tableau live
+  };
 
   let pointerMoved = false;
   textWrap.addEventListener('pointerdown', () => { pointerMoved = false; });
@@ -1475,15 +1537,39 @@ function buildTaskItem(task, index, tasks, listEl, searchResultMode) {
   // Suppression douce : déplace dans la corbeille au lieu de supprimer
   del.addEventListener('click', (e) => {
     e.stopPropagation();
-    // Détermine le parentId : l'entrée courante de la navigationStack pointe
-    // vers le niveau où se trouve la tâche ; son taskId est le parent.
-    const parentId = searchResultMode
-      ? null
-      : (navigationStack[navigationStack.length - 1].taskId ?? null);
-    trashTask(task, tasks, parentId);
+
+    // ── Détermination du vrai tableau source et du vrai parentId ────────────
+    // IMPORTANT — Mode recherche :
+    // En mode recherche, `tasks` est un tableau temporaire de snapshots.
+    // trashTask() fait un splice() sur le tableau qu'on lui passe ; si on lui
+    // donne le tableau de résultats, la tâche reste intacte dans rootTasks.
+    // On retrouve donc le vrai tableau parent via findParentList(), et on déduit
+    // le parentId en cherchant l'ancêtre direct dans rootTasks.
+    let srcList, parentId;
+    if (searchResultMode) {
+      // findParentList retourne le tableau qui CONTIENT directement task.id
+      srcList  = findParentList(rootTasks, task.id) || rootTasks;
+      // Si la tâche est à la racine, srcList === rootTasks → parentId = null
+      // Sinon, on retrouve l'id du parent en cherchant à qui appartient srcList
+      parentId = findParentIdOf(rootTasks, task.id);
+    } else {
+      // Hors recherche : navigationStack.top.taskId est l'id du parent visible
+      srcList  = tasks;
+      parentId = navigationStack[navigationStack.length - 1].taskId ?? null;
+    }
+
+    trashTask(task, srcList, parentId);
     updateTrashBadge();
-    if (searchResultMode) runSearch();
-    else { renderList(listEl, tasks); renderTree(); }
+
+    if (searchResultMode) {
+      // Relance la recherche pour mettre à jour la liste des résultats
+      // (la tâche supprimée ne doit plus apparaître dans les résultats)
+      renderTree();
+      runSearch();
+    } else {
+      renderList(listEl, tasks);
+      renderTree();
+    }
   });
 
   // ── Drag & Drop ───────────────────────────────────────
@@ -1660,6 +1746,30 @@ function findParentList(list, id) {
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * Retrouve l'id du parent direct d'une tâche dans l'arbre.
+ * Utile en mode recherche pour reconstituer le parentId à passer à trashTask().
+ *
+ * Algorithme : parcours récursif de l'arbre. Quand une tâche t a task.id dans
+ * ses children, t est le parent — on retourne t.id.
+ * Si la tâche est à la racine (rootTasks la contient directement), retourne null.
+ *
+ * @param {Task[]}  list - Tableau courant (racine à l'appel initial)
+ * @param {number}  id   - Id de la tâche dont on cherche le parent
+ * @returns {number|null} Id du parent, ou null si la tâche est à la racine
+ */
+function findParentIdOf(list, id) {
+  for (const t of list) {
+    // Si t a id dans ses enfants directs, t est le parent
+    if (t.children.some(c => c.id === id)) return t.id;
+    // Sinon on descend récursivement
+    const found = findParentIdOf(t.children, id);
+    if (found !== undefined) return found;
+  }
+  return undefined; // non trouvé à ce niveau
+  // Note : l'appelant traite undefined comme null (tâche de racine)
 }
 
 /**
@@ -2009,10 +2119,25 @@ function doFlush() {
     // que cet ordre prioritaire doit prévaloir sur les données distantes.
     touchUpdatedAt(moved.id);
     saveTasks();
-    renderList(listEl, tasks);
-    renderTree();
+    // En mode recherche (listEl === searchList), la priorité doit être reflétée
+    // dans le vrai arbre (arbre latéral) et les résultats de recherche doivent
+    // être rechargés pour refléter le nouvel ordre.
+    // Hors recherche : on re-rend simplement la liste courante.
+    if (listEl === searchList) {
+      renderTree();
+      runSearch();
+    } else {
+      renderList(listEl, tasks);
+      renderTree();
+    }
   } else {
-    renderList(listEl, tasks);
+    // Même si rien n'a bougé, on rafraîchit la vue pour cohérence.
+    // En mode recherche on relance runSearch() pour mettre à jour l'affichage.
+    if (listEl === searchList) {
+      runSearch();
+    } else {
+      renderList(listEl, tasks);
+    }
   }
 }
 

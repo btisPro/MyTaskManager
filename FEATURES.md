@@ -226,7 +226,9 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 |---|---|---|---|
 | 10.1 | Affichage au clic droit (desktop) | Menu positionné à la souris, repositionné pour rester dans le viewport | `app.js › buildTaskItem › contextmenu` |
 | 10.2 | Affichage au long press (mobile) | Appui ≥ 600 ms → menu + vibration 20 ms. Si le doigt bouge ensuite > 10 px → menu fermé + drag. | `app.js › initTouchDrag › longPressTimer` |
-| 10.3 | Options de déplacement | ⬆ Tout en haut, ▲+5, ▲+10, ▲+20, ▼-5, ▼-10, ▼-20 positions | `app.js › showContextMenu › moveItems` |
+| 10.3 | Options de déplacement (positions absolues) | ⬆ Tout en haut (index 0), ⬆ Top 10% (`⌊n×0.10⌋`), ▲ Premier quart (`⌊n×0.25⌋`), ▲ Première moitié (`⌊n×0.50⌋`). Les cibles sont calculées sur le vrai tableau au moment du clic (robuste aux modifications entre ouverture et action). | `app.js › showContextMenu › moveItems` |
+| 10.3b | Grisage des items déjà atteints | Si `currentIdx <= targetIdx`, l'item reçoit la classe `ctx-item--disabled` + `aria-disabled="true"` : il est grisé, non cliquable (`pointer-events:none`). Évite de proposer des actions sans effet. | `app.js › showContextMenu › alreadyThere`, `style.css › .ctx-item--disabled` |
+| 10.3c | Recalcul post-splice | L'index d'insertion est recalculé après le `splice` de la source (`realList.length = n-1`) pour placer correctement l'élément quelle que soit sa position relative à la cible. | `app.js › showContextMenu › insertIdx` |
 | 10.4 | Vrai parent retrouvé | En mode recherche, `findParentList` retrouve le vrai tableau parent | `app.js › showContextMenu` |
 | 10.5 | Rafraîchissement adapté | Relance `runSearch()` si mode recherche, sinon `renderList` | `app.js › showContextMenu` |
 | 10.6 | Fermeture automatique | Sur clic/tap ailleurs, scroll, ou touche Échap | `app.js › document click / scroll / keydown` |
@@ -234,7 +236,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 10.8 | Séparateur entre sections | `<li role="separator" class="ctx-sep">` trace un trait horizontal entre les items de déplacement et les items d'importance. | `app.js › showContextMenu › sep`, `style.css › .ctx-sep` |
 | 10.9 | Item 🔴 Importance forte | Pose `task.importance = 'high'`. Si déjà 'high', bascule à 'low'. Item marqué avec ✓ et classe `ctx-item--active` si importance actuelle. | `app.js › showContextMenu › importanceItems`, `style.css › .ctx-item--importance-high` |
 | 10.10 | Item 🟠 Importance moyenne | Pose `task.importance = 'medium'`. Si déjà 'medium', bascule à 'low'. Item marqué avec ✓ et classe `ctx-item--active` si importance actuelle. | `app.js › showContextMenu › importanceItems`, `style.css › .ctx-item--importance-medium` |
-| 10.11 | Classes CSS dédiées (non nth-child) | Les styles des items sont portés par des classes explicites (`ctx-item--top`, `ctx-item--down`, `ctx-item--importance-high/medium`, `ctx-item--active`) plutôt que `nth-child`, pour rester robustes à l'ajout de nouveaux items. | `style.css` |
+| 10.11 | Classes CSS dédiées (non nth-child) | Les styles des items sont portés par des classes explicites (`ctx-item--top`, `ctx-item--disabled`, `ctx-item--importance-high/medium`, `ctx-item--active`) plutôt que `nth-child`. | `style.css` |
 
 ---
 
@@ -251,7 +253,9 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | 11.6 | Hint de résultats | Nombre de résultats + filtres actifs affichés sous le champ | `app.js › runSearch › searchHint` |
 | 11.7 | Mode searchResultMode | Pas de drag intra-liste, navigation vers la tâche dans l'arbre au clic 📋 | `app.js › buildTaskItem / noteIcon` |
 | 11.8 | Fermeture | Bouton ✕, champ vidé + filtres décochés → retour à la vue précédente + reset filtres urgence | `app.js › closeSearch` |
-| 11.9 | Mise à jour après déplacement | `runSearch()` relancé après un drop ou une suppression en mode recherche | `app.js › performTreeDrop / del click` |
+| 11.9 | Mise à jour après déplacement | `runSearch()` relancé après un drop, une suppression ou un clic de priorité en mode recherche | `app.js › performTreeDrop / del click / doFlush` |
+| 11.15 | Suppression depuis résultats de recherche | Bouton ✕ en mode recherche utilise `findParentList()` pour trouver le vrai tableau source et `findParentIdOf()` pour le vrai parentId → la tâche est retirée du vrai arbre (et non d'un snapshot temporaire). `renderTree()` + `runSearch()` rafraîchissent arbre et résultats. | `app.js › buildTaskItem › del click / findParentIdOf` |
+| 11.16 | Priorité par clic depuis résultats de recherche | `getList()` en mode recherche appelle `findParentList(rootTasks, task.id)` → le splice s'applique sur le vrai tableau. `doFlush()` relance `runSearch()` (au lieu de `renderList`) quand `listEl === searchList`. | `app.js › buildTaskItem › getList / doFlush` |
 | 11.10 | Filtre 🔴 Urgentes | Case `#searchUrgent` : filtre les tâches dont `taskUrgencyClass` = `'task-urgent'`. Utilisable sans texte (parcourt tous les niveaux). | `app.js › runSearch › filterUrg` |
 | 11.11 | Filtre 🟠 Importantes | Case `#searchWarning` : filtre les tâches dont `taskUrgencyClass` = `'task-warning'`. Utilisable sans texte. | `app.js › runSearch › filterWarn` |
 | 11.12 | Combinaison texte + urgence | Texte seul → scope respecte l'option "tous niveaux". Urgence seule → toujours tous les niveaux + `collectAllTasksFlat`. Texte + urgence → intersection (résultats textuels filtrés par couleur). | `app.js › runSearch` |
@@ -340,7 +344,7 @@ Ce fichier liste **toutes les fonctionnalités** de l'application. Il sert de ch
 | # | Fonctionnalité | Détail | Fichier / Fonction |
 |---|---|---|---|
 | 14b.1 | Titre "Tâches" supprimé | Le `<h1>Tâches</h1>` de la vue liste a été retiré pour gagner de la place, en particulier sur smartphone. L'identité de l'app est assurée par "MtM" dans la topbar. | `index.html` |
-| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.0.9'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
+| 14b.2 | Numéro de version (`APP_VERSION`) | Constante `'v1.1.1'` définie en tête de `app.js`. Format `vMAJEUR.MINEUR.CORRECTIF`. **Gérée manuellement** par le développeur — ne pas auto-incrémenter. Injectée dans `#syncVersion` au démarrage. | `app.js › APP_VERSION` |
 | 14b.3 | Version affichée dans la modale sync | Pied de modale `#syncVersion` (toujours visible, que la sync soit activée ou non). Style monospace discret. | `index.html / style.css / app.js` |
 
 ---
@@ -377,8 +381,8 @@ La seule coloration des tâches est basée sur leurs **données** (importance + 
 
 | # | Fonctionnalité | Détail | Fichier |
 |---|---|---|---|
-| 17.1 | Runner Node.js | `node tests.js` — **192 assertions**, zéro dépendance externe. | `tests.js` |
-| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, logique menu contextuel (delta positions + importance), **nouveaux éléments mobile** (`.task-drag-handle`, `.task-menu-btn`, `dragFromHandle`, exclusions touchstart), **bandeau recherche blur**, **items importance menu**, **suppression coloration positionnelle** (absence nth-child 1/2/3, présence .task-urgent/.task-warning) | `tests.js` |
+| 17.1 | Runner Node.js | `node tests.js` — **230 assertions**, zéro dépendance externe. | `tests.js` |
+| 17.2 | Fonctions testées | `migrateTask`, `makeTask`, `taskUrgencyClass`, `findTaskById`, `isDescendantOrSelf`, `collectTaskIds`, `ensureTimestamps`, `mergeTasks`, `collectAllIds`, tri corbeille, `APP_VERSION`, `collectAllTasksFlat`, filtres urgence (seuls, combinés, intersection), guards drag/touch (`_touchGestureActive`, `pointerMoved`, `dragstart`, `_suppressNextClick`, `e.preventDefault` touchstart), logique `applyDrop`, **logique menu contextuel positions absolues par fraction** (Tout en haut / Top 10% / Premier quart / Première moitié, grisage, recalcul post-splice), importance menu, nouveaux éléments mobile, bandeau recherche blur, suppression coloration positionnelle, **CSS ctx-item--disabled**, **mode recherche v1.1.1** (`findParentIdOf`, suppression depuis résultats, réordonnement depuis résultats) | `tests.js` |
 | 17.3 | Stubs DOM/browser | `document`, `window`, `navigator`, `localStorage`, `setTimeout` mockés pour exécution hors navigateur. | `tests.js` |
 
 ## 18. Utilitaires internes
@@ -387,6 +391,7 @@ La seule coloration des tâches est basée sur leurs **données** (importance + 
 |---|---|---|---|
 | 16.1 | `findTaskById` | Recherche récursive d'une tâche par id dans l'arbre | `app.js › findTaskById` |
 | 16.2 | `findParentList` | Retourne le tableau parent direct d'une tâche | `app.js › findParentList` |
+| 16.2b | `findParentIdOf` | Retourne l'**id** du parent direct d'une tâche (ou `undefined` si à la racine). Utilisé par `del click` en mode recherche pour reconstituer le vrai `parentId` à passer à `trashTask()` → restauration correcte depuis la corbeille. | `app.js › findParentIdOf` |
 | 16.3 | `findPath` | Retourne le chemin complet depuis la racine jusqu'à une tâche | `app.js › findPath` |
 | 16.4 | `collectTaskIds` | Collecte récursivement tous les ids d'une tâche et ses descendants dans un Set | `app.js › collectTaskIds` |
 | 16.5 | `collectAllIds` | Idem, utilisé dans sync.js pour le merge | `sync.js › collectAllIds` |
@@ -417,6 +422,8 @@ Ces éléments sont critiques et ont déjà causé des régressions par le pass�
 | `markPurged` après `restoreTask` | Empêche la sync de ramener l'entrée de corbeille distante |
 | `purgedIds` rechargé dans `onSyncUpdate` | Resynchronise la mémoire avec ce que `sync.js` a écrit dans localStorage |
 | `findParentList` dans le menu contextuel | En mode recherche, `tasks` est un tableau temporaire — le vrai parent doit être retrouvé |
+| `findParentList` + `findParentIdOf` dans `del click` mode recherche | `tasks` est un snapshot temporaire de `runSearch()`. Sans ces deux fonctions, `trashTask()` reçoit un tableau fantôme et le vrai arbre n'est pas modifié (suppression purement visuelle). `findParentIdOf` est en plus nécessaire pour que la restauration depuis la corbeille replace la tâche au bon niveau. |
+| `getList = () => findParentList(rootTasks, task.id)` en mode recherche | Idem pour `doFlush()` : sans ça, le splice du clic de priorité se fait sur le snapshot de recherche, sans effet sur `rootTasks`. |
 | `collectAllIds([e.task], deletedIds)` dans `syncBidirectional` | Inclut les descendants des tâches en corbeille dans les ids supprimés |
 | `localAllIds` dans `mergeTasks` | Sans ça, un déplacement local est interprété comme une nouvelle tâche distante |
 | `touchUpdatedAt(id)` après **chaque** mutation | Sans ça, le merge choisit arbitrairement entre local et distant car les `updatedAt` sont identiques |

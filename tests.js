@@ -556,13 +556,13 @@ describe('renderTrashList — tri avec deletedAt identiques', () => {
   assert(ids.includes(11), 'id=11 toujours présent');
 });
 
-describe('APP_VERSION — valeur courante v1.0.9', () => {
+describe('APP_VERSION — valeur courante v1.1.1', () => {
   // La version est désormais gérée manuellement par le développeur.
-  // Ce test vérifie simplement que la valeur déclarée est bien "v1.0.9".
+  // Ce test vérifie simplement que la valeur déclarée est bien "v1.1.1".
   const src   = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
   const match = src.match(/const APP_VERSION\s*=\s*'([^']+)'/);
   if (match) {
-    assertEqual(match[1], 'v1.0.9', 'APP_VERSION vaut "v1.0.9" (gestion manuelle)');
+    assertEqual(match[1], 'v1.1.1', 'APP_VERSION vaut "v1.1.1" (gestion manuelle)');
   }
 });
 
@@ -889,49 +889,95 @@ describe('Logique applyDrop — cohérence réordonnement', () => {
   assertEqual(child.map(t => t.id), [2, 3], 'drop-child : A retiré de la liste → B, C');
 });
 
-describe('Menu contextuel — déplacement par position (logique)', () => {
+describe('Menu contextuel — déplacement par fraction (logique v1.1.0)', () => {
   /*
-   * Vérifie la logique de déplacement par delta du menu contextuel.
-   * Reproduit la logique de showContextMenu › items.forEach › click.
+   * Vérifie la nouvelle logique de déplacement vers des positions absolues
+   * exprimées en fractions du tableau (v1.1.0).
+   *
+   * Les 4 cibles :
+   *   null  → index 0           (Tout en haut)
+   *   0.10  → Math.floor(n*0.10)  (Top 10%)
+   *   0.25  → Math.floor(n*0.25)  (Premier quart)
+   *   0.50  → Math.floor(n*0.50)  (Première moitié)
+   *
+   * Après le splice de la source, l'index cible est recalculé sur la liste
+   * amputée (realList.length = n-1) pour placer correctement l'élément.
+   *
+   * Un item est désactivé si currentIdx <= targetIdx (tâche déjà à/avant la cible).
    */
 
-  function applyDelta(tasks, taskId, delta) {
+  // Reproduction de la logique de showContextMenu › handler click
+  function applyFraction(tasks, taskId, fraction) {
     const result = tasks.map(t => ({ ...t }));
     const idx = result.findIndex(t => t.id === taskId);
     if (idx === -1) return result;
-    const newIdx = delta === -Infinity
-      ? 0
-      : Math.max(0, Math.min(result.length - 1, idx + delta));
+    // Calcul de newIdx avant splice (pour comparer avec idx)
+    const newIdx = fraction === null ? 0 : Math.floor(result.length * fraction);
     if (newIdx === idx) return result;
     const [moved] = result.splice(idx, 1);
-    result.splice(newIdx, 0, moved);
+    // Recalcul post-splice (liste raccourcie d'un élément)
+    const insertIdx = fraction === null ? 0 : Math.floor(result.length * fraction);
+    result.splice(insertIdx, 0, moved);
     return result;
   }
 
-  const tasks = [
-    { id: 1, text: 'A', children: [] },
-    { id: 2, text: 'B', children: [] },
-    { id: 3, text: 'C', children: [] },
-    { id: 4, text: 'D', children: [] },
-    { id: 5, text: 'E', children: [] },
-  ];
+  // Reproduction de la logique de grisage (alreadyThere)
+  function isDisabled(tasks, taskId, fraction) {
+    const idx = tasks.findIndex(t => t.id === taskId);
+    if (idx === -1) return false;
+    const targetIdx = fraction === null ? 0 : Math.floor(tasks.length * fraction);
+    return idx <= targetIdx;
+  }
 
-  // ⬆ Tout en haut
-  const top = applyDelta(tasks, 5, -Infinity);
-  assertEqual(top[0].id, 5, '⬆ Tout en haut : E passe en position 0');
-  assertEqual(top.map(t => t.id), [5, 1, 2, 3, 4], '⬆ Tout en haut : ordre correct');
+  const tasks10 = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, text: String(i + 1), children: [] }));
+  // ids 1..10, positions 0..9
 
-  // ▲ +5 (remonte de 5 — depuis pos 4, va en 0)
-  const up5 = applyDelta(tasks, 5, -5);
-  assertEqual(up5[0].id, 5, '▲ +5 : E (pos 4) remonte à pos 0 (clamped)');
+  // ── Tout en haut (fraction=null → index 0) ────────────────────────────────
+  const top = applyFraction(tasks10, 10, null);
+  assertEqual(top[0].id, 10, 'Tout en haut : id=10 (pos 9) → pos 0');
+  assertEqual(top[1].id, 1,  'Tout en haut : id=1 reste en pos 1 après insertion');
 
-  // ▼ -5 (descend de 5 — depuis pos 0, va en 4)
-  const down5 = applyDelta(tasks, 1, +5);
-  assertEqual(down5[4].id, 1, '▼ -5 : A (pos 0) descend à pos 4 (clamped)');
+  // ── Top 10% (n=10 → Math.floor(10*0.10)=1) ───────────────────────────────
+  const top10 = applyFraction(tasks10, 10, 0.10);
+  // idx source=9, newIdx=Math.floor(10*0.10)=1 ≠ 9 → déplace
+  // après splice: liste a 9 éléments, insertIdx=Math.floor(9*0.10)=0 → pos 0
+  assertEqual(top10[0].id, 10, 'Top 10% (n=10) : id=10 → pos 0 (insertIdx recalculé sur n-1=9)');
 
-  // Pas de mouvement si déjà en position extrême
-  const noMove = applyDelta(tasks, 1, -5);
-  assertEqual(noMove.map(t => t.id), [1, 2, 3, 4, 5], 'Pas de mouvement si déjà en tête');
+  // ── Premier quart (n=10 → Math.floor(10*0.25)=2) ─────────────────────────
+  const q1 = applyFraction(tasks10, 10, 0.25);
+  // après splice: insertIdx=Math.floor(9*0.25)=2
+  assertEqual(q1[2].id, 10, 'Premier quart (n=10) : id=10 → pos 2');
+
+  // ── Première moitié (n=10 → Math.floor(10*0.50)=5) ───────────────────────
+  const half = applyFraction(tasks10, 10, 0.50);
+  // après splice: insertIdx=Math.floor(9*0.50)=4
+  assertEqual(half[4].id, 10, 'Première moitié (n=10) : id=10 → pos 4');
+
+  // ── Grisage : tâche déjà dans la zone ────────────────────────────────────
+  // id=1 est en pos 0 → déjà "tout en haut" → disabled
+  assert(isDisabled(tasks10, 1, null),   'id=1 (pos 0) disabled pour "Tout en haut"');
+  // id=1 est en pos 0, top10 cible=1 → pos 0 <= 1 → disabled
+  assert(isDisabled(tasks10, 1, 0.10),   'id=1 (pos 0) disabled pour "Top 10%" (cible=1)');
+  // id=2 est en pos 1 <= top10 cible 1 → disabled
+  assert(isDisabled(tasks10, 2, 0.10),   'id=2 (pos 1) disabled pour "Top 10%" (pos<=cible=1)');
+  // id=3 est en pos 2 > top10 cible 1 → actif
+  assert(!isDisabled(tasks10, 3, 0.10),  'id=3 (pos 2) actif pour "Top 10%" (pos>cible=1)');
+  // id=10 (pos 9) n'est pas disabled pour aucune cible
+  assert(!isDisabled(tasks10, 10, null),  'id=10 (pos 9) actif pour "Tout en haut"');
+  assert(!isDisabled(tasks10, 10, 0.50),  'id=10 (pos 9) actif pour "Première moitié" (cible=5)');
+
+  // ── Cas limite : liste à 1 seul élément ──────────────────────────────────
+  const single = [{ id: 99, text: 'X', children: [] }];
+  assert(isDisabled(single, 99, null),   'Liste 1 élément : toujours disabled pour "Tout en haut"');
+  assert(isDisabled(single, 99, 0.50),   'Liste 1 élément : toujours disabled pour "Première moitié"');
+
+  // ── Présence des nouveaux labels dans le source de app.js ─────────────────
+  const src = fs.readFileSync(require('path').join(__dirname, 'app.js'), 'utf8');
+  assert(src.includes('Top 10%'),          "Label 'Top 10%' présent dans showContextMenu");
+  assert(src.includes('Premier quart'),    "Label 'Premier quart' présent dans showContextMenu");
+  assert(src.includes('Première moitié'), "Label 'Première moitié' présent dans showContextMenu");
+  assert(src.includes('fraction'),         "Variable 'fraction' utilisée dans showContextMenu");
+  assert(src.includes('ctx-item--disabled'), "Classe ctx-item--disabled utilisée pour les items déjà atteints");
 });
 
 describe('Nouveaux éléments DOM dans buildTaskItem — poignée et bouton menu', () => {
@@ -1225,8 +1271,8 @@ describe('Menu contextuel — classes CSS (style.css)', () => {
     'Classe .ctx-item--top définie dans style.css (remplace :first-child)'
   );
   assert(
-    css.includes('.ctx-item--down'),
-    'Classe .ctx-item--down définie dans style.css (remplace nth-child)'
+    !css.includes('.ctx-item--down'),
+    'Classe .ctx-item--down absente de style.css (supprimée en v1.1.0 — remplacée par --disabled)'
   );
   assert(
     css.includes('.ctx-sep'),
@@ -1327,6 +1373,293 @@ describe('Suppression coloration positionnelle des 3 premières tâches (v1.0.9)
   assert(
     /task-warning[\s\S]{0,200}border-left/.test(css),
     '.task-warning conserve sa bordure gauche colorée (indicateur warning basé sur données)'
+  );
+});
+
+describe('Menu contextuel — CSS ctx-item--disabled (v1.1.0)', () => {
+  /*
+   * Vérifie que style.css définit bien la classe ctx-item--disabled
+   * pour griser les items de déplacement déjà atteints.
+   * La classe doit empêcher les interactions (pointer-events:none)
+   * et afficher une couleur atténuée.
+   */
+  const css = fs.readFileSync(require('path').join(__dirname, 'style.css'), 'utf8');
+
+  assert(
+    css.includes('.ctx-item--disabled'),
+    'Classe .ctx-item--disabled définie dans style.css'
+  );
+  assert(
+    /ctx-item--disabled[\s\S]{0,150}pointer-events:\s*none/.test(css),
+    '.ctx-item--disabled a pointer-events:none (non cliquable)'
+  );
+  assert(
+    /ctx-item--disabled[\s\S]{0,150}cursor:\s*default/.test(css),
+    '.ctx-item--disabled a cursor:default (curseur neutre)'
+  );
+  // La classe --down (descente) est supprimée : n'existe plus dans le CSS
+  assert(
+    !css.includes('.ctx-item--down'),
+    'Classe .ctx-item--down supprimée de style.css (remplacée par --disabled)'
+  );
+});
+
+describe('findParentIdOf — id du parent direct dans l\'arbre (v1.1.1)', () => {
+  /*
+   * findParentIdOf(list, id) retourne l'id du parent direct de la tâche d'id `id`
+   * dans l'arbre `list`. Retourne null si la tâche est à la racine, undefined si
+   * introuvable.
+   *
+   * Cette fonction est utilisée dans buildTaskItem (del click, mode recherche)
+   * pour reconstituer le vrai parentId à passer à trashTask().
+   * Sans elle, trashTask() recevait parentId=null pour toutes les sous-tâches,
+   * ce qui empêchait leur restauration correcte depuis la corbeille.
+   */
+
+  // Reproduction de la fonction depuis app.js
+  function findParentIdOf(list, id) {
+    for (const t of list) {
+      if (t.children.some(c => c.id === id)) return t.id;
+      const found = findParentIdOf(t.children, id);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+
+  // Arbre de test :
+  //   root (id=1)
+  //     child1 (id=2)
+  //       grandchild (id=4)
+  //     child2 (id=3)
+  const tree = [
+    { id: 1, children: [
+      { id: 2, children: [
+        { id: 4, children: [] }
+      ]},
+      { id: 3, children: [] },
+    ]},
+  ];
+
+  // Tâche à la racine → parentId doit être null (undefined → traité comme null par l'appelant)
+  const rootResult = findParentIdOf(tree, 1);
+  assert(
+    rootResult === undefined,
+    'findParentIdOf sur tâche racine retourne undefined (traitée comme null par l\'appelant)'
+  );
+
+  // Enfant direct de root (id=1) → parent = 1
+  assertEqual(
+    findParentIdOf(tree, 2),
+    1,
+    'findParentIdOf sur enfant direct retourne l\'id du parent (id=1)'
+  );
+
+  // Enfant direct de root (id=1) → parent = 1
+  assertEqual(
+    findParentIdOf(tree, 3),
+    1,
+    'findParentIdOf sur deuxième enfant direct retourne l\'id du parent (id=1)'
+  );
+
+  // Petit-enfant (id=4) → parent = id=2
+  assertEqual(
+    findParentIdOf(tree, 4),
+    2,
+    'findParentIdOf sur petit-enfant retourne l\'id du parent direct (id=2, pas la racine)'
+  );
+
+  // Id inexistant → undefined
+  assertEqual(
+    findParentIdOf(tree, 999),
+    undefined,
+    'findParentIdOf sur id inexistant retourne undefined'
+  );
+});
+
+describe('Mode recherche — suppression douce utilise le vrai tableau source (v1.1.1)', () => {
+  /*
+   * Vérifie que app.js contient bien la logique de recherche du vrai tableau
+   * source (findParentList) et du vrai parentId (findParentIdOf) lors d'une
+   * suppression en mode recherche.
+   *
+   * Bug corrigé : avant v1.1.1, le del.addEventListener('click') en mode
+   * searchResultMode passait `tasks` (tableau temporaire de résultats) à
+   * trashTask(). Ce tableau n'est pas le vrai tableau des données persistées.
+   * La tâche restait donc intacte dans rootTasks : suppression purement visuelle.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  // Vérifie que findParentIdOf est déclarée dans app.js
+  assert(
+    /function findParentIdOf/.test(src),
+    'findParentIdOf déclarée dans app.js (utilitaire parentId pour corbeille)'
+  );
+
+  // Vérifie que le del click en mode recherche utilise findParentList pour srcList
+  assert(
+    /searchResultMode[\s\S]{0,300}findParentList\(rootTasks,\s*task\.id\)/.test(src),
+    'del click en mode recherche utilise findParentList(rootTasks, task.id) comme srcList'
+  );
+
+  // Vérifie que findParentIdOf est appelé avec rootTasks et task.id dans app.js
+  // (utilisé dans del click mode recherche pour retrouver le vrai parentId)
+  assert(
+    /findParentIdOf\(rootTasks,\s*task\.id\)/.test(src),
+    'del click en mode recherche utilise findParentIdOf(rootTasks, task.id) comme parentId'
+  );
+
+  // Vérifie que renderTree() est appelé avant runSearch() après suppression en mode recherche
+  assert(
+    /renderTree\(\)[\s\S]{0,50}runSearch\(\)/.test(src),
+    'Après suppression en mode recherche : renderTree() puis runSearch() appelés'
+  );
+});
+
+describe('Mode recherche — clic de priorité utilise le vrai tableau parent (v1.1.1)', () => {
+  /*
+   * Vérifie que la closure getList() en mode recherche appelle findParentList()
+   * pour retrouver le vrai tableau parent avant d'effectuer le splice.
+   *
+   * Bug corrigé : avant v1.1.1, getList = () => tasks retournait le tableau
+   * temporaire de résultats de recherche. doFlush() spliceait ce tableau sans
+   * effet sur rootTasks → le réordonnement était purement visuel.
+   */
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+
+  // Vérifie que getList en mode recherche utilise findParentList
+  assert(
+    /searchResultMode[\s\S]{0,200}findParentList\(rootTasks,\s*task\.id\)/.test(src),
+    'getList() en mode recherche utilise findParentList(rootTasks, task.id)'
+  );
+
+  // Vérifie que doFlush appelle runSearch() quand listEl === searchList
+  assert(
+    /listEl\s*===\s*searchList[\s\S]{0,100}runSearch\(\)/.test(src),
+    'doFlush() appelle runSearch() quand listEl === searchList (mode recherche)'
+  );
+});
+
+describe('Mode recherche — simulation suppression + réordonnement sur vrai arbre (v1.1.1)', () => {
+  /*
+   * Tests fonctionnels de findParentList et findParentIdOf combinés,
+   * simulant exactement le comportement du del click et de doFlush
+   * en mode recherche.
+   */
+
+  // Copies locales des fonctions utilisées
+  function findParentList(list, id) {
+    for (const t of list) {
+      if (t.id === id) return list;
+      const found = findParentList(t.children, id);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function findParentIdOf(list, id) {
+    for (const t of list) {
+      if (t.children.some(c => c.id === id)) return t.id;
+      const found = findParentIdOf(t.children, id);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+
+  function trashTask(task, srcList, parentId, trashItems) {
+    const idx = srcList.findIndex(t => t.id === task.id);
+    if (idx === -1) return false;
+    srcList.splice(idx, 1);
+    trashItems.push({ task, parentId: parentId ?? null });
+    return true;
+  }
+
+  // Arbre de test avec sous-tâche
+  const rootTasks = [
+    { id: 10, text: 'Parent', children: [
+      { id: 11, text: 'Enfant A', children: [] },
+      { id: 12, text: 'Enfant B', children: [] },
+    ]},
+    { id: 20, text: 'Racine 2', children: [] },
+  ];
+
+  // Simulation de la recherche : tableau temporaire (snapshots)
+  const searchResults = [
+    rootTasks[0].children[0], // Enfant A (id=11)
+    rootTasks[1],             // Racine 2 (id=20)
+  ];
+
+  const trashItems = [];
+
+  // ── Test 1 : suppression d'une sous-tâche depuis les résultats de recherche ──
+  // On simule exactement ce que fait del.addEventListener('click') en mode recherche.
+  const task11 = searchResults[0]; // Enfant A
+  const srcList  = findParentList(rootTasks, task11.id) || rootTasks;
+  const parentId = findParentIdOf(rootTasks, task11.id);
+
+  // srcList doit pointer sur children du Parent (id=10), pas sur searchResults
+  assert(
+    srcList !== searchResults,
+    'Simulation suppression mode recherche : srcList ≠ tableau résultats (vrai parent retrouvé)'
+  );
+  assert(
+    srcList === rootTasks[0].children,
+    'Simulation suppression mode recherche : srcList = children du bon parent (id=10)'
+  );
+  assertEqual(
+    parentId,
+    10,
+    'Simulation suppression mode recherche : parentId correct (id=10)'
+  );
+
+  // La suppression doit affecter le vrai arbre
+  const deleted = trashTask(task11, srcList, parentId, trashItems);
+  assert(deleted, 'Simulation suppression mode recherche : trashTask a trouvé la tâche dans srcList');
+  assertEqual(
+    rootTasks[0].children.length,
+    1,
+    'Après suppression mode recherche : enfant retiré du vrai arbre (1 enfant restant)'
+  );
+  assertEqual(
+    rootTasks[0].children[0].id,
+    12,
+    'Après suppression mode recherche : seul Enfant B (id=12) reste'
+  );
+  assertEqual(
+    trashItems[0].parentId,
+    10,
+    'Corbeille : parentId mémorisé = id du vrai parent (id=10, pour restauration)'
+  );
+
+  // ── Test 2 : réordonnement (priorité par clic) depuis les résultats de recherche ──
+  // On simule doFlush en mode recherche : getList() doit retrouver le vrai tableau.
+  const rootTasks2 = [
+    { id: 1, text: 'T1', children: [] },
+    { id: 2, text: 'T2', children: [] },
+    { id: 3, text: 'T3', children: [] },
+  ];
+  // Résultats de recherche (snapshot) — ordre différent, ne reflète pas rootTasks2
+  const fakeSearchResults = [rootTasks2[2], rootTasks2[0]]; // T3, T1
+
+  // getList() en mode recherche doit retourner le vrai tableau (rootTasks2)
+  const realList = findParentList(rootTasks2, rootTasks2[2].id) || rootTasks2;
+  assert(
+    realList === rootTasks2,
+    'Simulation clic priorité mode recherche : getList() retourne rootTasks (pas le snapshot de recherche)'
+  );
+
+  // splice sur le vrai tableau
+  const cur = realList.findIndex(t => t.id === 3);
+  const [moved] = realList.splice(cur, 1);
+  realList.splice(0, 0, moved); // remonte T3 en tête
+  assertEqual(
+    realList[0].id,
+    3,
+    'Simulation clic priorité mode recherche : T3 remonte en tête du VRAI tableau'
+  );
+  assertEqual(
+    rootTasks2[0].id,
+    3,
+    'rootTasks2 modifié en mémoire (réordonnement effectif, pas juste dans le snapshot)'
   );
 });
 

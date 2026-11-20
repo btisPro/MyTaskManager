@@ -925,13 +925,19 @@ h2:hover { color: var(--accent); }
   color: #92400e;
 }
 
-/* ── Items de descente (▼) : couleur atténuée + hover rouge doux ──────────── */
-.ctx-item--down {
-  color: #6b7280;
+/* ── Item désactivé (tâche déjà à/avant la cible) ─────────────────────────── */
+/* ctx-item--disabled est posé quand la tâche est déjà dans la zone visée.    */
+/* L'item est grisé et ne réagit pas aux interactions (cursor:default,        */
+/* pointer-events:none). aria-disabled="true" est aussi posé en HTML.         */
+.ctx-item--disabled {
+  color: #c0c4cc;
+  cursor: default;
+  pointer-events: none;
 }
-.ctx-item--down:hover {
-  background: #fef2f2;
-  color: #b91c1c;
+.ctx-item--disabled:hover {
+  background: none;
+  color: #c0c4cc;
+  font-weight: normal;
 }
 
 /* ── Séparateur entre sections ─────────────────────────────────────────────── */
